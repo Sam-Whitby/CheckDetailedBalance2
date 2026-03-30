@@ -118,12 +118,19 @@ If[AssociationQ[$staticSysParams],
                         Lookup[$staticSysParams, "couplings", {}]],
   $staticSymVars = {}];
 
+(* Fixed symbolic parameters: kept free during symbolic check, assigned their
+   declared numeric values (not random) during numerical MCMC. *)
+$fixedParams  = If[AssociationQ[$staticSysParams],
+                   Lookup[$staticSysParams, "fixedParams", <||>], <||>];
+$fixedSymVars = Keys[$fixedParams];
+$fixedNumVals = Values[$fixedParams];
+
 If[$hasDynParams,
   dynP    = DynamicSymParams[allStates];
   dynVars = Join[Lookup[dynP, "eps", {}], Lookup[dynP, "couplings", {}]];
   compSymVars = Union[$staticSymVars, dynVars],
   compSymVars = $staticSymVars];
-compSymAssumptions = Map[Element[#, Reals] &, compSymVars];
+compSymAssumptions = Map[Element[#, Reals] &, Union[compSymVars, $fixedSymVars]];
 
 (* ---- Symbolic detailed-balance check ---- *)
 Print["Running symbolic detailed balance check ..."];
@@ -134,11 +141,13 @@ If[violations === {},
 
 (* ---- Numerical MCMC check ---- *)
 Print["Running numerical MCMC (", nSteps, " steps) ..."];
-If[compSymVars =!= {},
+allBlockVars = Union[compSymVars, $fixedSymVars];
+If[allBlockVars =!= {},
   SeedRandom[42];
-  compNumVals = RandomReal[{-1, 1}, Length[compSymVars]];
-  Block[Evaluate[compSymVars],
-    MapThread[Set, {compSymVars, compNumVals}];
+  compNumVals = If[compSymVars =!= {}, RandomReal[{-1, 1}, Length[compSymVars]], {}];
+  Block[Evaluate[allBlockVars],
+    If[compSymVars =!= {}, MapThread[Set, {compSymVars, compNumVals}]];
+    If[$fixedSymVars =!= {}, MapThread[Set, {$fixedSymVars, $fixedNumVals}]];
     mcmcCounts = RunNumericalMCMCAT[allStates, $alg, $numBeta, "NSteps" -> nSteps];
     bw = BoltzmannWeightsAT[allStates, $energy, $numBeta]],
   mcmcCounts = RunNumericalMCMCAT[allStates, $alg, $numBeta, "NSteps" -> nSteps];

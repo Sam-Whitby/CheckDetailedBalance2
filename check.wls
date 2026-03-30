@@ -113,6 +113,15 @@ If[AssociationQ[$staticSysParams],
                         Lookup[$staticSysParams, "couplings", {}]],
   $staticSymVars = {}];
 
+(* Fixed symbolic parameters: kept free during the symbolic check so that
+   transition matrix entries contain exact symbolic expressions, but assigned
+   their declared numeric values (not random) during numerical MCMC.
+   Declared in the .wl file as:  symParams = <|"fixedParams" -> <|sym -> val, ...|>|> *)
+$fixedParams  = If[AssociationQ[$staticSysParams],
+                   Lookup[$staticSysParams, "fixedParams", <||>], <||>];
+$fixedSymVars = Keys[$fixedParams];
+$fixedNumVals = Values[$fixedParams];
+
 (* ---- Generate candidate bit strings ---- *)
 maxBitVec = ToExpression /@ Characters[maxBitString];
 maxLen     = Length[maxBitVec];
@@ -203,7 +212,8 @@ Do[
     dynVars = Join[Lookup[dynP, "eps", {}], Lookup[dynP, "couplings", {}]];
     compSymVars = Union[$staticSymVars, dynVars],
     compSymVars = $staticSymVars];
-  compSymAssumptions = Map[Element[#, Reals] &, compSymVars];
+  (* Fixed params are real for FullSimplify purposes (e.g. jumpSigma ∈ Reals) *)
+  compSymAssumptions = Map[Element[#, Reals] &, Union[compSymVars, $fixedSymVars]];
 
   (* ---- Symbolic detailed-balance check ---- *)
   symResult = "-"; failStr = "-";
@@ -216,15 +226,18 @@ Do[
   (* ---- Numerical MCMC check ---- *)
   klStr = "-"; numResult = "-";
   If[mode =!= "Symbolic" && nStates > 1,
-    If[compSymVars =!= {},
-      (* Assign reproducible random values to symbolic energy parameters *)
+    (* Energy-coupling symbols get reproducible random values in [-1,1];
+       fixed params (e.g. jumpSigma) get their declared numeric values. *)
+    allBlockVars = Union[compSymVars, $fixedSymVars];
+    If[allBlockVars =!= {},
       SeedRandom[42];
-      compNumVals = RandomReal[{-1, 1}, Length[compSymVars]];
-      Block[Evaluate[compSymVars],
-        MapThread[Set, {compSymVars, compNumVals}];
+      compNumVals = If[compSymVars =!= {}, RandomReal[{-1, 1}, Length[compSymVars]], {}];
+      Block[Evaluate[allBlockVars],
+        If[compSymVars =!= {}, MapThread[Set, {compSymVars, compNumVals}]];
+        If[$fixedSymVars =!= {}, MapThread[Set, {$fixedSymVars, $fixedNumVals}]];
         mcmcCounts = RunNumericalMCMCAT[allStates, $alg, $numBeta, "NSteps" -> nSteps];
         boltzmann  = BoltzmannWeightsAT[allStates, $energy, $numBeta]],
-      (* Fully numeric energy *)
+      (* Fully numeric: no symbolic vars of any kind *)
       mcmcCounts = RunNumericalMCMCAT[allStates, $alg, $numBeta, "NSteps" -> nSteps];
       boltzmann  = BoltzmannWeightsAT[allStates, $energy, $numBeta]];
     simFreq = N[# / Total[mcmcCounts]] & /@ mcmcCounts;

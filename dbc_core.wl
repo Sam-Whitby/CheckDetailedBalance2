@@ -1095,7 +1095,13 @@ MakeTransitionGrid[allStates_List, matrix_Association] := Module[
         With[{p = Lookup[matrix, Key[{allStates[[i]], allStates[[j]]}], 0]},
           If[p === 0,
              Style["0", 9, GrayLevel[0.7]],
-             Style[TraditionalForm @ FullSimplify[p], 9]]],
+             (* Pane with ShrinkToFit scales long expressions to fit the cell
+                while preserving full vector resolution for zooming. *)
+             Pane[
+               Style[TraditionalForm @ FullSimplify[p], 9],
+               {160, Automatic},
+               ImageSizeAction -> "ShrinkToFit"
+             ]]],
         {j, n}],
       Style[ToString[allStates[[i]]], Bold, 10, GrayLevel[0.2]]],
     {i, n}];

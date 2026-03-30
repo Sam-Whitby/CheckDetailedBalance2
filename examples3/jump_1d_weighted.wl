@@ -168,5 +168,9 @@ BitsToState[bits_List] :=
 
 numBeta = 1
 
-(* Standard deviation of the jump distribution in lattice units. *)
-jumpSigma = 2
+(* Standard deviation of the jump distribution in lattice units.
+   Kept as a free symbol during the symbolic check so that the transition
+   matrix entries display as exact Erf expressions.  Assigned the value 2
+   (in lattice units) during numerical MCMC and animations via the
+   "fixedParams" mechanism in symParams. *)
+symParams = <|"fixedParams" -> <|jumpSigma -> 2|>|>

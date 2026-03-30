@@ -175,7 +175,10 @@ BitsToState[bits_List] :=
 numBeta = 1
 
 (* Standard deviation of the jump distribution in lattice units.
-   Used symbolically in $normalBinW during the symbolic check (the
-   sigma-dependent factors cancel in the detailed-balance ratio);
-   used numerically during the MCMC check. *)
-jumpSigma = 2
+   Kept as a free symbol during the symbolic check so that the transition
+   matrix entries display as exact Erf expressions.  Assigned the value 2
+   (in lattice units) during numerical MCMC and animations via the
+   "fixedParams" mechanism in symParams.
+   The sigma-dependent factors cancel in the detailed-balance ratio
+   because w(d) = w(L-d) holds as a structural algebraic identity. *)
+symParams = <|"fixedParams" -> <|jumpSigma -> 2|>|>
