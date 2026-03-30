@@ -292,7 +292,7 @@ BuildTransitionMatrix[allStates_List, alg_, opts : OptionsPattern[]] :=
 RunWithBitsAT[alg_, state_, bits_List] := Module[
   {pos = 0, weight = 1,
    nReals = 0, intervals = {},
-   readBit, acceptTestI, makeRealVar, seqBernoulli, result},
+   readBit, acceptTestI, makeRealVar, seqBernoulli, makeContToken, result},
 
   (* --- Fair bit read: each bit contributes factor 1/2 --- *)
   readBit[] := (
@@ -354,17 +354,29 @@ RunWithBitsAT[alg_, state_, bits_List] := Module[
       elems[[chosen]]
     ];
 
+  (* --- Create a continuous uniform token for RandomReal[{lo,hi}] ---
+     Carries seqBernoulli so UpValues can branch into discrete outcomes
+     when Floor / Round / Ceiling is applied to the token. *)
+  makeContToken[lo_, hi_] := $dbc$contToken["Uniform", lo, hi, seqBernoulli];
+
   (* --- Run the algorithm with random-call interception --- *)
   result = Catch[
     Block[{
-      (* RandomReal[] / Random[] -> fresh interval-tracking token.
-         UpValues (defined below) dispatch comparisons to acceptTestI. *)
+      (* RandomReal[] -> interval-tracking comparison token.
+         RandomReal[{lo,hi}] -> continuous uniform token for use with
+         Floor/Round/Ceiling (UpValues defined below discretise it). *)
       RandomReal = Function[
-        If[Length[{##}] === 0,
-          makeRealVar[],
-          Throw[$dbc$cantHandle[
-            "RandomReal[...]: only zero-argument form is supported; use RandomReal[]"],
-            $dbc$tag]]],
+        Module[{args = {##}},
+          Which[
+            args === {},
+              makeRealVar[],
+            MatchQ[args, {{_, _}}],
+              makeContToken[args[[1,1]], args[[1,2]]],
+            True,
+              Throw[$dbc$cantHandle[
+                "RandomReal[" <> ToString[args] <>
+                "]: only RandomReal[] and RandomReal[{lo,hi}] are supported"],
+                $dbc$tag]]]],
       Random = Function[{}, makeRealVar[]],
 
       (* RandomInteger: rejection sampling for all ranges.
@@ -446,12 +458,83 @@ RunWithBitsAT[alg_, state_, bits_List] := Module[
                 $dbc$tag]
           ]]],
 
+      (* RandomVariate: UniformDistribution[{lo,hi}] -> continuous uniform token.
+         All other distributions throw $dbc$cantHandle. *)
+      RandomVariate = Function[
+        Module[{args = {##}},
+          Which[
+            MatchQ[args, {HoldPattern[UniformDistribution[{_, _}]]}],
+              makeContToken[args[[1,1,1]], args[[1,1,2]]],
+            True,
+              Throw[$dbc$cantHandle[
+                "RandomVariate[" <> ToString[args] <>
+                "]: only UniformDistribution[{lo,hi}] is supported; " <>
+                "use RandomReal[{lo,hi}] for uniform draws"],
+                $dbc$tag]]]],
+
+      (* RandomPermutation: Knuth (Fisher-Yates) shuffle via the intercepted
+         RandomInteger[], which reads fair bits from the tape. *)
+      RandomPermutation = Function[
+        Module[{args = {##}, list, n, perm},
+          Which[
+            MatchQ[args, {_Integer?Positive}],
+              n    = args[[1]];
+              perm = Range[n];
+              Do[With[{j = RandomInteger[{1, i}]},
+                   perm[[{i, j}]] = perm[[{j, i}]]],
+                 {i, n, 2, -1}];
+              perm,
+            MatchQ[args, {_List}],
+              list = args[[1]];
+              n    = Length[list];
+              If[n == 0, Return[{}, Module]];
+              perm = Range[n];
+              Do[With[{j = RandomInteger[{1, i}]},
+                   perm[[{i, j}]] = perm[[{j, i}]]],
+                 {i, n, 2, -1}];
+              list[[perm]],
+            True,
+              Throw[$dbc$cantHandle[
+                "RandomPermutation[" <> ToString[args] <>
+                "]: only RandomPermutation[n] and RandomPermutation[list] are supported"],
+                $dbc$tag]]]],
+
+      (* RandomSample: partial Knuth shuffle via intercepted RandomInteger[].
+         RandomSample[list]    = full random permutation of list.
+         RandomSample[list, k] = uniformly random ordered k-subset of list. *)
+      RandomSample = Function[
+        Module[{args = {##}, list, k, n, perm, result},
+          Which[
+            MatchQ[args, {_List}],
+              list = args[[1]]; n = Length[list];
+              If[n == 0, Return[{}, Module]];
+              perm = Range[n];
+              Do[With[{j = RandomInteger[{1, i}]},
+                   perm[[{i, j}]] = perm[[{j, i}]]],
+                 {i, n, 2, -1}];
+              list[[perm]],
+            MatchQ[args, {_List, _Integer?NonNegative}],
+              list = args[[1]]; k = args[[2]]; n = Length[list];
+              If[k > n,
+                Throw[$dbc$cantHandle[
+                  "RandomSample: k=" <> ToString[k] <>
+                  " exceeds list length " <> ToString[n]], $dbc$tag]];
+              perm   = Range[n];
+              result = Table[
+                With[{j = RandomInteger[{1, i}]},
+                  perm[[{i, j}]] = perm[[{j, i}]];
+                  list[[perm[[i]]]]],
+                {i, n, n - k + 1, -1}];
+              result,
+            True,
+              Throw[$dbc$cantHandle[
+                "RandomSample[" <> ToString[args] <>
+                "]: only RandomSample[list] and RandomSample[list,k] are supported"],
+                $dbc$tag]]]],
+
       (* Unsupported random functions: throw $dbc$cantHandle immediately. *)
-      RandomVariate     = Function[Throw[$dbc$cantHandle["RandomVariate"],     $dbc$tag]],
-      RandomSample      = Function[Throw[$dbc$cantHandle["RandomSample"],      $dbc$tag]],
-      RandomPermutation = Function[Throw[$dbc$cantHandle["RandomPermutation"], $dbc$tag]],
-      RandomWord        = Function[Throw[$dbc$cantHandle["RandomWord"],        $dbc$tag]],
-      RandomPrime       = Function[Throw[$dbc$cantHandle["RandomPrime"],       $dbc$tag]]
+      RandomWord  = Function[Throw[$dbc$cantHandle["RandomWord"],  $dbc$tag]],
+      RandomPrime = Function[Throw[$dbc$cantHandle["RandomPrime"], $dbc$tag]]
     },
     alg[state]
     ],
@@ -462,11 +545,16 @@ RunWithBitsAT[alg_, state_, bits_List] := Module[
     result === $OutOfBits,  $OutOfBits,
     result === $dbc$outOfRange, $dbc$outOfRange,
     MatchQ[result, $dbc$cantHandle[_]], result,
-    (* Detect unconsumed $dbc$irand token: RandomReal[] was never compared *)
+    (* Detect unconsumed comparison token: RandomReal[] never compared *)
     !FreeQ[{result, weight}, $dbc$irand],
       $dbc$cantHandle[
         "RandomReal[]/Random[] result was used in an unsupported way " <>
         "(not directly in a comparison like RandomReal[] < p)"],
+    (* Detect unconsumed continuous token: RandomReal[{lo,hi}] never discretised *)
+    !FreeQ[{result, weight}, $dbc$contToken],
+      $dbc$cantHandle[
+        "RandomReal[{lo,hi}] or RandomVariate[UniformDistribution[...]] result " <>
+        "was never discretised with Floor / Round / Ceiling"],
     True,
       {result, weight}
   ]
@@ -516,6 +604,60 @@ $dbc$rand /: Less[p_, $dbc$rand[at_]]         := (at[1 - p] == 1)
 $dbc$rand /: LessEqual[p_, $dbc$rand[at_]]    := (at[1 - p] == 1)
 $dbc$rand /: Greater[p_, $dbc$rand[at_]]      := (at[p] == 1)
 $dbc$rand /: GreaterEqual[p_, $dbc$rand[at_]] := (at[p] == 1)
+
+
+(* ================================================================
+   SECTION 1d – CONTINUOUS UNIFORM TOKEN  ($dbc$contToken)
+   ================================================================ *)
+
+(* $dbc$contToken["Uniform", lo, hi, sb] represents a continuous latent
+   variable X ~ Uniform[lo, hi).  sb is the Module-local seqBernoulli
+   function captured at token creation.
+
+   Arithmetic UpValues propagate the distribution through addition;
+   Mod collapses a full-period shift back to Uniform[0, L);
+   Floor / Round / Ceiling discretise by calling seqBernoulli with the
+   exact rational bin probabilities 1/L each -- no approximation.
+
+   Addition:  Uniform[lo, hi) + c  =  Uniform[lo+c, hi+c)
+   Mod:       Mod[Uniform[lo, lo+L), L]  =  Uniform[0, L)
+              (only when span hi-lo equals the modulus exactly)
+   Floor:     Uniform[0, L) -> {0,...,L-1} each with prob 1/L
+   Round:     same (for integer L the rounding-boundary effects cancel)
+   Ceiling:   Uniform[0, L) -> {1,...,L} each with prob 1/L
+              (Mod[Ceiling[X], L] gives {0,...,L-1} for periodic wrap) *)
+
+$dbc$contToken /: Plus[before___, $dbc$contToken["Uniform", lo_, hi_, sb_], after___] :=
+  With[{offset = Plus @@ {before, after}},
+    If[!FreeQ[offset, $dbc$contToken],
+      Throw[$dbc$cantHandle[
+        "Adding two continuous random tokens together is not supported"], $dbc$tag],
+      $dbc$contToken["Uniform", lo + offset, hi + offset, sb]]]
+
+$dbc$contToken /: Mod[$dbc$contToken["Uniform", lo_, hi_, sb_], L_] :=
+  With[{span = hi - lo},
+    If[TrueQ[span === L],
+      $dbc$contToken["Uniform", 0, L, sb],
+      Throw[$dbc$cantHandle[
+        "Mod[$dbc$contToken, " <> ToString[L] <>
+        "]: interval span " <> ToString[span] <>
+        " does not equal the modulus. Only Mod[X,L] where X~Uniform[lo,lo+L) is supported."],
+        $dbc$tag]]]
+
+$dbc$contToken /: Floor[$dbc$contToken["Uniform", 0, L_Integer, sb_]] :=
+  (* Each integer k in {0,...,L-1} has probability 1/L exactly *)
+  sb[Table[1/L, {L}], Range[0, L - 1]]
+
+$dbc$contToken /: Round[$dbc$contToken["Uniform", 0, L_Integer, sb_]] :=
+  (* For integer L, Round[Uniform[0,L)] gives each of {0,...,L-1} with prob 1/L:
+     boundary bins [0,1/2) and [L-1/2,L) both map to 0 and L-1 respectively
+     with combined width 1/L, matching all interior bins exactly. *)
+  sb[Table[1/L, {L}], Range[0, L - 1]]
+
+$dbc$contToken /: Ceiling[$dbc$contToken["Uniform", 0, L_Integer, sb_]] :=
+  (* Ceiling[Uniform[0,L)] gives {1,...,L} each with prob 1/L.
+     Use Mod[Ceiling[X],L]+1 for 1-indexed periodic sites. *)
+  sb[Table[1/L, {L}], Range[1, L]]
 
 
 (* ================================================================
@@ -680,13 +822,17 @@ BoltzmannWeightsAT[allStates_List, energy_, numBeta_] := Module[
    Automatically intercepted (safe to use freely):
      RandomReal[], Random[], RandomInteger[], RandomChoice[]
 
+   Also intercepted (safe to use):
+     RandomVariate[UniformDistribution[{lo,hi}]], RandomPermutation[n/list],
+     RandomSample[list], RandomSample[list,k]
+
    These are NOT interceptable and will cause analysis failure:
-     RandomVariate, RandomSample, RandomPermutation, AbsoluteTime, etc.
+     RandomWord, RandomPrime, RandomColor, AbsoluteTime, etc.
 
    Returns True if no unhandleable calls found, False with warnings otherwise.
    ---------------------------------------------------------------- *)
 $unanalyzableFunctions = {
-  RandomVariate, RandomSample, RandomPermutation, RandomWord, RandomPrime,
+  RandomWord, RandomPrime,
   RandomColor, AbsoluteTime, SessionTime, TimeObject, DateObject, Now
 };
 
@@ -704,8 +850,9 @@ CheckAlgorithmSafety[alg_Symbol] := Module[
     Print["  SAFETY FAIL: algorithm '", alg,
           "' contains calls that cannot be converted to readBit/acceptTest: ",
           found];
-    Print["  Note: RandomReal[], RandomInteger[], and RandomChoice[] ARE",
-          " supported and are intercepted automatically."];
+    Print["  Note: RandomReal[], RandomInteger[], RandomChoice[], ",
+          "RandomVariate[UniformDistribution[...]], RandomPermutation[], ",
+          "and RandomSample[] ARE supported and are intercepted automatically."];
     False
   ]
 ]
