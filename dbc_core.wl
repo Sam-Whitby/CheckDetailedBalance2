@@ -949,6 +949,127 @@ ExportAndShowPython[args_Association] := Module[
   ]
 ]
 
+(* ----------------------------------------------------------------
+   ExportReportNotebook
+   Exports the full check report as a native Mathematica notebook
+   (.nb file) and opens it in Mathematica.app.
+
+   All mathematical expressions are rendered as Mathematica's own
+   typeset output -- inherently vector, perfectly sharp at any zoom.
+   Decision-tree outcome nodes show only the destination state; hover
+   over any green/orange node to see the exact path weight as a Tooltip.
+   Trees are arranged in rows of up to 3, so they never overflow
+   horizontally and cannot overlap each other or subsequent sections.
+   ---------------------------------------------------------------- *)
+ExportReportNotebook[args_Association] := Module[
+  {name, allStates, treeData, matrix, violations, simFreq, bw, kl, algCode,
+   pass, badge, trees, treeGrid, matGrid, dbTab, freqPanel, cells, nb,
+   safeName, nbPath},
+
+  name       = args["name"];
+  allStates  = args["allStates"];
+  treeData   = args["treeData"];
+  matrix     = args["matrix"];
+  violations = If[ListQ[args["violations"]], args["violations"], {}];
+  simFreq    = args["simFreq"];
+  bw         = args["bw"];
+  kl         = args["kl"];
+  algCode    = args["algCode"];
+  pass       = violations === {};
+
+  badge = Panel[
+    Row[{
+      Style[name, 18, Bold, GrayLevel[0.1]],
+      Spacer[25],
+      Style[If[pass,
+               "\[FilledCircle]  DETAILED BALANCE:  PASS",
+               "\[FilledCircle]  DETAILED BALANCE:  FAIL"],
+            17, Bold,
+            If[pass, RGBColor[0.04,0.54,0.04], RGBColor[0.74,0.04,0.04]]]
+    }],
+    Background -> GrayLevel[0.94],
+    FrameMargins -> {{16,16},{12,12}}];
+
+  trees = Table[
+    Framed[
+      Column[{DrawStateTree[s, $normLeaf /@ treeData[s]]}, Alignment -> Center],
+      FrameStyle -> GrayLevel[0.82], RoundingRadius -> 5,
+      Background -> GrayLevel[0.975], FrameMargins -> 8],
+    {s, allStates}];
+
+  (* At most 3 trees per row -- prevents horizontal overflow *)
+  treeGrid = Grid[Partition[trees, UpTo[3]], Spacings -> {2, 2}, Alignment -> {Left, Top}];
+
+  matGrid   = MakeTransitionGrid[allStates, matrix];
+  dbTab     = MakeDBTable[allStates, violations];
+  freqPanel = MakeFrequencyPanel[allStates, simFreq, bw, kl];
+
+  cells = {
+    Cell[BoxData @ ToBoxes @ badge,
+         "Output", CellMargins -> {{8,8},{4,14}}],
+
+    Cell["Algorithm Under Test", "Section"],
+    Cell[algCode, "Code"],
+
+    Cell["Decision Trees  (Symbolic Execution Paths)", "Section"],
+    Cell[TextData[{
+      "Each tree shows all bit sequences the algorithm can consume from a \
+given starting state.  ",
+      StyleBox["Blue", FontWeight->"Bold",
+               FontColor->RGBColor[0.22,0.42,0.70]],
+      " = root / internal bit-choice node.  ",
+      StyleBox["Green", FontWeight->"Bold", FontColor->Darker[Green,0.2]],
+      " outcome = moved to a new state.  ",
+      StyleBox["Orange", FontWeight->"Bold", FontColor->Darker[Orange,0.1]],
+      " outcome = stayed.  Edge labels are bit values (0/1).  \
+Hover over an outcome node to see the exact path weight."
+    }], "Text"],
+    Cell[BoxData @ ToBoxes @ treeGrid,
+         "Output", CellMargins -> {{8,8},{4,4}}],
+
+    Cell["Symbolic Transition Matrix  T[ i \[Rule] j ]", "Section"],
+    Cell["Entry (i, j) = total probability of transitioning FROM state i \
+TO state j, accumulated over all execution paths.  \[Beta] is kept \
+symbolic throughout.", "Text"],
+    Cell[BoxData @ ToBoxes @ matGrid,
+         "Output", CellMargins -> {{8,8},{4,4}}],
+
+    Cell["Detailed Balance Check:  \
+T(i\[Rule]j)\[CenterDot]\[Pi](i) = T(j\[Rule]i)\[CenterDot]\[Pi](j)",
+         "Section"],
+    Cell["Every pair of distinct states is tested using FullSimplify with \
+\[Beta] > 0.  \[Pi](s) = Exp[\[Minus]\[Beta] E(s)].", "Text"],
+    Cell[BoxData @ ToBoxes @ dbTab,
+         "Output", CellMargins -> {{8,8},{4,4}}],
+
+    Cell["Numerical MCMC Validation", "Section"],
+    Cell["The algorithm is run as a live Markov chain with genuinely random \
+bits.  Simulated state frequencies are compared to the analytical Boltzmann \
+distribution Exp[\[Minus]\[Beta]E(s)] / Z.", "Text"],
+    Cell[BoxData @ ToBoxes @ freqPanel,
+         "Output", CellMargins -> {{8,8},{4,18}}]
+  };
+
+  nb = Notebook[cells,
+    WindowTitle  -> "DetailedBalanceChecker \[LongDash] " <> name,
+    StyleDefinitions -> "Default.nb",
+    WindowSize   -> {1200, 900},
+    WindowMargins -> {{Automatic, Automatic}, {Automatic, 0}},
+    Editable     -> True,
+    Background   -> White
+  ];
+
+  safeName = StringReplace[name,
+               {" " -> "_", Except[WordCharacter | "_"] -> ""}];
+  nbPath   = $dbcDir <> safeName <> "_report.nb";
+
+  Print["  Exporting notebook: ", nbPath];
+  Export[nbPath, nb];
+  RunProcess[{"open", nbPath}];
+  nbPath
+]
+
+
 (* ================================================================
    SECTION 4 – VISUALISATION PRIMITIVES
    ================================================================ *)
@@ -1024,11 +1145,20 @@ DrawStateTree[startState_, leaves_List] := Module[
     Flatten @ Table[
       With[{bits = leaf[[1]], outs = leaf[[2]]},
         Table[$oKey[bits,i] -> Placed[
-          Column[{
+          (* Show only the destination state inside the node.
+             Hovering reveals the exact path weight as a Tooltip. *)
+          Tooltip[
             Style["\[RightArrow]" <> ToString[outs[[i,2]]], 8,
                   If[outs[[i,2]] =!= startState, Darker[Green,0.2], Darker[Orange,0.15]]],
-            $probLabel[outs[[i,1]]]
-          }, Alignment -> Center, Spacings -> 0.1], Center],
+            Column[{
+              Style["Next state:", 9, Bold, GrayLevel[0.2]],
+              Style[ToString[outs[[i,2]]], 9, GrayLevel[0.1]],
+              Spacer[4],
+              Style["Path weight:", 9, Bold, GrayLevel[0.2]],
+              Style[TraditionalForm[outs[[i,1]]], 10]
+            }, Spacings -> 0.3]
+          ],
+          Center],
         {i, Length[outs]}]
       ],
       {leaf, leaves}]
@@ -1073,7 +1203,7 @@ DrawStateTree[startState_, leaves_List] := Module[
     GraphLayout  -> {"LayeredDigraphEmbedding",
                      "RootVertex"   -> $bKey[{}],
                      "Orientation"  -> Top},
-    ImageSize    -> {Max[220, 140*nLeaves], Max[180, 95*(maxDepth+2)]},
+    ImageSize    -> {Max[300, 200*nLeaves], Max[240, 120*(maxDepth+2)]},
     Background   -> GrayLevel[0.97],
     PlotLabel    -> Style["State " <> ToString[startState], 10, Bold,
                           GrayLevel[0.3]]
@@ -1098,8 +1228,8 @@ MakeTransitionGrid[allStates_List, matrix_Association] := Module[
              (* Pane with ShrinkToFit scales long expressions to fit the cell
                 while preserving full vector resolution for zooming. *)
              Pane[
-               Style[TraditionalForm @ FullSimplify[p], 9],
-               {160, Automatic},
+               Style[TraditionalForm @ FullSimplify[p], 11],
+               {200, Automatic},
                ImageSizeAction -> "ShrinkToFit"
              ]]],
         {j, n}],
@@ -1265,9 +1395,10 @@ given starting state.  ",
       " outcome = algorithm stayed.  Edge labels are bit values (0 / 1).  \
 Each bit either selects an integer (for RandomInteger / RandomChoice) or \
 narrows the interval of a latent uniform variable U (for RandomReal[]).  \
-Outcome labels show the destination state and path weight."
+Hover over an outcome node to see the exact path weight."
     }], "Text"],
-    Cell[BoxData @ ToBoxes @ Row[trees, Spacer[12]],
+    Cell[BoxData @ ToBoxes @
+           Grid[Partition[trees, UpTo[3]], Spacings -> {2, 2}, Alignment -> {Left, Top}],
          "Output", CellMargins -> {{8,8},{4,4}}],
 
     Cell["Symbolic Transition Matrix  T[ i \[Rule] j ]", "Section"],

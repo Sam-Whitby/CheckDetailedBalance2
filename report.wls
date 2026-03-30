@@ -175,5 +175,5 @@ reportArgs = <|
   "kl"         -> kl,
   "algCode"    -> algCode|>;
 
-Print["\nGenerating PNG report ..."];
-ExportAndShowPython[reportArgs];
+Print["\nGenerating notebook report ..."];
+ExportReportNotebook[reportArgs];
