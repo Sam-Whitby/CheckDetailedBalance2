@@ -138,6 +138,7 @@ See `template.wl` for a fully annotated starting point.
 | `kawasaki_1d.wl` | 1D Kawasaki (nearest-neighbour swap) on a periodic ring. Labeled particles, symmetric proposal via `RandomInteger[{0, L-1}]` for bond selection, Metropolis acceptance. |
 | `kawasaki_2d.wl` | 2D Kawasaki on a periodic square lattice. Uses `RandomInteger` for bond selection and `RandomReal[]` for Metropolis acceptance. |
 | `vmmc_2d.wl` | Virtual Move Monte Carlo (Whitelam–Geissler) cluster moves on a 2D lattice. Uses `RandomChoice[occupied]`, `RandomChoice[dirs]`, and multiple symbolic `RandomReal[]` comparisons against link-formation probabilities. |
+| `vmmc_2d_thesis.wl` | **Chapter 2 column VMMC**: extends `vmmc_2d.wl` to the condensate-column geometry from Sam Whitby's PhD thesis (Chapter2/src/VMMC.cpp + NucleolusModel.cpp). Key differences from `vmmc_2d.wl`: (1) hard wall in the x/column direction (periodic only in y/row direction); (2) four coupling ranges — d=1, √2, 2, √5 — each with independent symbolic coupling constants (`Jd1_ab`, `Jdsq2_ab`, `Jd2_ab`, `Jdsq5_ab`); (3) optional linear chemical gradient γ(x_mid) = x_mid/L scaling all weak couplings; (4) optional cluster-size cutoff ⌊1/r⌋ (matching C++ proposeMove); (5) optional saturated-link (SL) moves; (6) internal-bond Metropolis filter for detailed balance with spatially-varying energies. Default settings (`$tvHardBarrier=True`, `$tvGradient=False`, `$tvCutoff=False`, `$tvProbSL=0`) are designed for the symbolic DB check. **DB check result: pending** — see commands below. |
 | `jump_1d_edit.wl` | 1D jump dynamics: a particle jumps by a displacement `d` drawn via **rejection sampling** (uniform `RandomInteger[{0,L-1}]`, then thinned by `RandomReal[] >= w(d)/w(0)`) to implement a discrete normal distribution. Symmetric proposal, Metropolis acceptance. |
 | `jump_1d_weighted.wl` | Same jump dynamics as `jump_1d_edit.wl`, but the displacement is drawn **directly** via `RandomChoice[normalWeights -> displacements]`. This is the canonical test of the new weighted-`RandomChoice` support (Approach 3). Both implementations are mathematically equivalent and both pass detailed balance. |
 
@@ -149,6 +150,100 @@ See `template.wl` for a fully annotated starting point.
 | `kawasaki_2d_fail.wl` | Same wrong-sign `dE` in 2D | Same inversion of Boltzmann distribution. |
 | `cluster_1d_fail.wl` | Cluster slides only rightward | Forward and reverse proposals are not symmetric: sliding right has probability 1 but sliding left has probability 0 for the same bond, breaking detailed balance. |
 | `cluster_2d.wl` | Cluster merging changes the cluster count | The number of clusters in the system is not conserved, so the forward and reverse move probabilities do not match. |
+
+---
+
+---
+
+## `vmmc_2d_thesis.wl` — design notes and how to run
+
+### What was implemented
+
+`vmmc_2d_thesis.wl` is a Mathematica translation of the Chapter 2 C++ VMMC
+(`Chapter2/src/VMMC.cpp` + `NucleolusModel.cpp`).  It shares the same
+bijective integer encoding, `BitsToState`, `DisplayState`, and
+`ValidStateIDs` as `vmmc_2d.wl`, but replaces the Algorithm and energy
+function to match the column physics:
+
+| Feature | `vmmc_2d.wl` | `vmmc_2d_thesis.wl` |
+|---------|-------------|---------------------|
+| Boundary conditions | fully periodic (torus) | periodic in y (rows), hard wall in x (cols) |
+| Interaction range | d=1 (nearest neighbour) | d=1, √2, 2, √5 |
+| Coupling symbols | `J_ab` (one per type pair) | `Jd1_ab`, `Jdsq2_ab`, `Jd2_ab`, `Jdsq5_ab` |
+| Chemical gradient | none | optional `γ(x_mid)=x_mid/L` |
+| Cluster-size cutoff | none | optional `⌊1/r⌋` (C++ proposeMove) |
+| Saturated-link moves | none | optional, probability `$tvProbSL` |
+| Internal-bond Metropolis | no-op | applied when gradient active |
+| Neighbour shell for link tests | union of shells of p, pPost, pRev at d=1 | same, at d=√5 |
+
+The hard-barrier mode (`$tvHardBarrier = True`) closes the system so that
+detailed balance can be checked — no exit/replacement dynamics occur.
+
+The internal-bond Metropolis filter (C++ lines 758–817) corrects for the fact
+that VMMC link weights only Boltzmann-weight *boundary* bonds (one particle
+moving, one static).  When interactions are spatially varying (gradient on),
+*internal* bonds (both particles moving together) also change energy; the
+filter applies `min(1, exp(−β ΔE_int))` to compensate.  For uniform coupling
+(`$tvGradient=False`) every internal ΔE is zero and the filter is a no-op.
+
+### How to run the detailed-balance check
+
+Default (uniform coupling, no gradient, no cutoff, hard barrier):
+
+```bash
+cd CheckDetailedBalance2
+wolframscript -file check.wls examples3/vmmc_2d_thesis.wl \
+  MaxBitString=1111111 Mode=Both NSteps=20000
+```
+
+With gradient (tests the internal-bond Metropolis filter):
+
+```bash
+wolframscript -file check.wls examples3/vmmc_2d_thesis.wl \
+  MaxBitString=111111 Mode=Both NSteps=20000
+# Then edit the file to set $tvGradient = True before running.
+```
+
+With cluster-size cutoff enabled (adds BFS branches; slower):
+
+```bash
+# Edit: $tvCutoff = True
+wolframscript -file check.wls examples3/vmmc_2d_thesis.wl \
+  MaxBitString=11111 Mode=Symbolic
+```
+
+Animation (square grid, e.g. 3×3 with 4 particles):
+
+```bash
+wolframscript -file animate.wls examples3/vmmc_2d_thesis.wl \
+  Sites=9 N=4 Steps=500 FPS=10 Jd112=−1.0 Jdsq212=−0.5
+```
+
+### Known issues / things to verify
+
+1. **DB check runtime**: The checker's BFS over bit strings grows quickly with
+   extended interactions (four coupling symbols per type pair instead of one).
+   Start with `MaxBitString=1111111` (7 bits, states up to 2-site grids) and
+   increase gradually.  For 3-site grids (`MaxBitString=11111111`) the check
+   may take tens of minutes.
+
+2. **Cutoff with DB checker**: The cluster-size cutoff (`$tvCutoff=True`)
+   adds a `RandomReal[]` draw whose comparison `r ≤ 1/k` creates many BFS
+   branches.  Leave `$tvCutoff=False` (default) for DB checking; the cutoff
+   does not affect detailed balance theoretically.
+
+3. **Gradient check**: With `$tvGradient=True` and a fixed L, the γ factors
+   become rational numbers (e.g. γ=3/4 for the mid-column bond in a 4-column
+   grid).  The DB checker should still handle these symbolically.  The internal-
+   bond Metropolis filter is required for the check to pass.
+
+4. **C++ neighbour finding**: The C++ `recursiveMoveAssignment` queries
+   `interactionsCallback` at the particle's *current* position only, whereas
+   `vmmc_2d_thesis.wl` (like `vmmc_2d.wl`) uses the union of neighbour shells
+   of p, pPost, and pRev.  The union is required for correctness at extended
+   range: a particle within √5 of pPost but outside √5 of p changes energy
+   upon the move and must be link-tested.  If the C++ interaction range does
+   not cover pPost-neighbours, the C++ code may miss some link tests.
 
 ---
 
