@@ -1,11 +1,11 @@
 (* ================================================================
-   vmmc_2d_thesis.wl  —  VMMC for the Column / Condensate Geometry
+   vmmc_2d_thesis.wl  —  VMMC for a Condensate Column Geometry
    ================================================================
 
    Mathematica translation of the Chapter 2 C++ VMMC implementation
    (Chapter2/src/VMMC.cpp + NucleolusModel.cpp).  Designed for:
 
-     1.  Symbolic detailed-balance checking (hard-barrier mode).
+     1.  Symbolic detailed-balance checking via check.wls.
      2.  Live animation via animate.wls.
 
    GEOMETRY
@@ -14,68 +14,69 @@
             State[[s]] = 0 (empty) or k ∈ {1,...,N} (labeled particle).
             L = Round[Sqrt[Length[state]]].
 
-   Site (r, c):  r = row (y-direction, PERIODIC),  c = col (x-direction).
-   Index:        s = (r-1)*L + c,   r,c ∈ {1,...,L}.
+   Site numbering (same as vmmc_2d.wl):
+     (r,c) → s = (r−1)*L + c,   r = row (1..L), c = col (1..L).
 
    Boundary conditions:
-     y / row direction:   periodic (torus)
-     x / col direction:   hard wall — col 0 and col L+1 are inaccessible.
-                          With $tvHardBarrier = True (default for DB check)
-                          any cluster move that would carry a particle
-                          outside the column is rejected outright.
+     Row / y direction:  PERIODIC (torus).
+     Col / x direction:  HARD WALL — col < 1 or col > L is inaccessible.
+                         With $tvHardBarrier = True (default), any
+                         cluster move that would push a particle outside
+                         the column is rejected outright.
 
    INTERACTIONS
    ─────────────────────────────────────────────────────────────────
-   Distance is computed with minimum-image in y and absolute in x:
-     dc = c2 − c1  (absolute)
-     dr = min-image(r2 − r1, L)   (periodic)
+   Distance uses minimum-image in row, absolute in col:
+     dr = min-image(r2 − r1, L)   dc = c2 − c1
      d² = dr² + dc²
 
-   Four coupling ranges (identical to C++ weakD1/Dsq2/D2/Dsq5):
-     d²=1  (cardinal,    distance 1):   γ(x_mid) × Jd1_<a><b>
-     d²=2  (diagonal,    distance √2):  γ(x_mid) × Jdsq2_<a><b>
-     d²=4  (cardinal×2,  distance 2):   γ(x_mid) × Jd2_<a><b>
-     d²=5  (knight move, distance √5):  γ(x_mid) × Jdsq5_<a><b>
+   Coupling ranges (matching C++ weakD1 / Dsq2 / D2 / Dsq5):
+     d²=1,2,4,5  →  γ(x_mid) × $pairJ[a,b]
 
-   Hard-core exclusion (d²=0, same site) → Infinity.
+   A SINGLE coupling symbol J<a><b> per type pair is used for all
+   interaction distances.  This is compatible with animate.wls
+   (which assigns J12, J13, … from the command line) and correctly
+   tests the extended-range VMMC link mechanism under the DB checker.
 
-   GRADIENT
+   GRADIENT (optional, off by default)
    ─────────────────────────────────────────────────────────────────
-   γ(x_mid) = x_mid / L   if  $tvGradient = True
-            = 1            if  $tvGradient = False  (default, uniform)
-   x_mid = (c1 + c2)/2  (column midpoint of the bond).
+   γ(x_mid) = Clip[x_mid / L, {0,1}]  when $tvGradient = True
+            = 1                         when $tvGradient = False
 
-   When the gradient is active, the VMMC link weights correctly use
-   the position-dependent energy, and an internal-bond Metropolis
-   filter (C++ lines 758–817 of VMMC.cpp) is applied after cluster
-   growth to restore detailed balance for the co-moving pairs.
+   x_mid = midpoint column of the bond = (c1 + c2)/2.
+
+   When the gradient is active an internal-bond Metropolis filter
+   (C++ VMMC.cpp lines 758–817) is applied after cluster growth:
+   ΔE_int = E_post − E_pre over all moving-moving pairs;
+   accept with min(1, exp(−β ΔE_int)).  For uniform coupling this
+   is always a no-op and draws NO random bits.
 
    CLUSTER GROWTH
    ─────────────────────────────────────────────────────────────────
-   Whitelam–Geissler link-weight mechanism (same as vmmc_2d.wl):
+   Whitelam–Geissler link-weight mechanism (identical to vmmc_2d.wl):
 
      wFwd = max(1 − exp(β(eInit − eFwd)), 0)
      wRev = max(1 − exp(β(eInit − eRev)), 0)
 
-   Neighbour shell: union of all sites within d=√5 of p, pPost, pRev.
-   This is essential for correctness at extended range, as any site
-   within √5 of the virtual forward/reverse position can change its
-   bond energy and must be subjected to a link test.
+   Neighbour shell tested for each cluster particle p: union of the
+   √5-shells of p, pPost and pRev.  Required because any site within
+   √5 of the virtual forward or reverse position can have a changed
+   bond energy with p and MUST be link-tested.
 
-   Optional cluster-size cutoff (C++ VMMC.cpp proposeMove):
-     draw r ~ U[0,1],  cutOff = ⌊1/r⌋
-     reject move if |cluster| > cutOff
+   Hard-wall check for new cluster members is performed in Algorithm
+   AFTER the cluster is fully built (not inside the cluster builder),
+   so no random bits are consumed by a wall rejection.
 
-   Optional saturated-link (SL) mode (C++ --phi-sl flag):
-     with probability $tvProbSL, skip neighbours whose type
-     (mod $tvSlN0) is already present in the cluster.
+   Optional features (all off by default for DB checking):
+     $tvCutoff   — cluster-size cutoff ⌊1/r⌋  (C++ proposeMove)
+     $tvProbSL   — saturated-link probability  (C++ --phi-sl)
+     $tvStokes   — Stokes hydrodynamic drag    (C++ accept())
 
    CHECKER INTERFACE
    ─────────────────────────────────────────────────────────────────
-   Compatible with check.wls / dbc_core.wl (same structure as
-   vmmc_2d.wl). BitsToState filters to perfect-square arrays.
-   Coupling symbols Jd1_ab, Jdsq2_ab, Jd2_ab, Jdsq5_ab replace the
-   single J_ab of vmmc_2d.wl.
+   Identical to vmmc_2d.wl: BitsToState, DisplayState, ValidStateIDs.
+   DynamicSymParams returns the J<a><b> symbols needed for each
+   component (same format as vmmc_2d.wl).
 
    References:
      C++ source:  Chapter2/src/VMMC.cpp, NucleolusModel.cpp
@@ -83,37 +84,39 @@
    ================================================================ *)
 
 
-(* ---- Simulation parameters (change before running) ---------------------- *)
+(* ================================================================
+   PARAMETERS  (edit these before running)
+   ================================================================ *)
 
-(* Hard wall at column boundaries.  True = hard barrier (no exit; system
-   closed → detailed balance can be checked).
-   False = exit-and-replace condition (breaks DB; for simulation only). *)
+(* Hard wall at column edges.
+   True  = closed system → DB checkable.
+   False = exit-and-replace (simulation only, breaks DB). *)
 $tvHardBarrier = True;
 
-(* Linear chemical gradient γ(x) = col/L.  False = uniform coupling (γ=1).
-   When True an internal-bond Metropolis filter is applied after cluster
-   growth to ensure detailed balance with spatially-varying energies. *)
+(* Linear chemical gradient γ(x) = col/L  (False = uniform, γ=1).
+   When True an internal-bond Metropolis filter corrects DB. *)
 $tvGradient = False;
 
-(* Cluster-size cutoff: draw r~U[0,1], reject move if |cluster|>⌊1/r⌋.
-   Set False to simplify symbolic DB check (cutoff does not affect DB but
-   adds BFS branches). *)
+(* Cluster-size cutoff ⌊1/r⌋ (r ~ U[0,1]).  Adds BFS depth. *)
 $tvCutoff = False;
 
-(* Saturated-link move probability (0 = disabled).
-   When enabled, a fraction $tvProbSL of moves use the SL rule:
-   no two cluster members share the same type mod $tvSlN0. *)
+(* Saturated-link move probability φ_SL  (0 = disabled). *)
 $tvProbSL = 0;
-$tvSlN0   = 1;
+$tvSlN0   = 1;    (* type modulus for SL: skip if type mod $tvSlN0 already in cluster *)
+
+(* Stokes hydrodynamic drag  (False = unit diffusion).
+   When True draws one RandomReal[] per multi-particle cluster move. *)
+$tvStokes     = False;
+$tvRefRadius  = 0.5;   (* reference particle radius for Stokes formula *)
 
 
 (* ================================================================
    SECTION 1 — Bijective integer encoding   (identical to vmmc_2d.wl)
    ================================================================ *)
 
-$cL[L_]        := $cL[L]     = Sum[Binomial[L, k]*k!, {k, 0, L}]
-$cLPre[L_]     := $cLPre[L]  = Sum[$cL[l], {l, 0, L-1}]
-$cLNPre[L_,N_] := $cLNPre[L,N] = Sum[Binomial[L,k]*k!, {k, 0, N-1}]
+$cL[L_]        := $cL[L]      = Sum[Binomial[L,k]*k!, {k, 0, L}]
+$cLPre[L_]     := $cLPre[L]   = Sum[$cL[l], {l, 0, L-1}]
+$cLNPre[L_,N_] := $cLNPre[L,N]= Sum[Binomial[L,k]*k!, {k, 0, N-1}]
 
 $rankCombo[pos_List] := Sum[Binomial[pos[[i]], i], {i, Length[pos]}]
 
@@ -150,40 +153,34 @@ $decode[id_Integer] :=
    SECTION 2 — Column geometry helpers
    ================================================================ *)
 
-(* Row and column of site s in an L×L grid (1-indexed, row-major).
-   Row = y-direction (periodic).  Col = x-direction (hard wall). *)
 $tvRow[s_, L_] := Ceiling[s / L]
 $tvCol[s_, L_] := Mod[s-1, L] + 1
 
 (* Apply displacement {dr, dc} from site s.
-   Row: periodic wrap.  Col: hard wall — returns None if out of [1,L]. *)
+   Row: periodic.  Col: hard wall — returns None if outside [1,L]. *)
 $tvApplyDir[s_, {dr_, dc_}, L_] :=
-  Module[{newC = $tvCol[s,L] + dc},
+  With[{newC = $tvCol[s,L] + dc},
     If[newC < 1 || newC > L, None,
-       (Mod[$tvRow[s,L] + dr - 1, L]) * L + newC]]
+       Mod[$tvRow[s,L] + dr - 1, L] * L + newC]]
 
-(* Distance squared between s1 and s2: absolute x, minimum-image y. *)
+(* Squared distance: min-image in row, absolute in col. *)
 $tvD2[s1_, s2_, L_] :=
-  Module[{dr = Mod[$tvRow[s1,L] - $tvRow[s2,L], L],
-          dc = $tvCol[s1,L] - $tvCol[s2,L]},
-    If[2*dr > L, dr -= L];
-    dr^2 + dc^2]
+  With[{drRaw = Mod[$tvRow[s1,L] - $tvRow[s2,L], L],
+         dc   = $tvCol[s1,L] - $tvCol[s2,L]},
+    With[{dr = If[2*drRaw > L, drRaw - L, drRaw]},
+      dr^2 + dc^2]]
 
 (* All actual grid sites within 1 ≤ d² ≤ 5 of virtual position {vr, vc}.
-   vc may be outside [1,L] (e.g. for a reverse-virtual move at the wall).
-   Row is periodic; col is bounded to [1,L]. *)
+   vc may lie outside [1,L] (reverse-virtual move near the wall).
+   Uses Select so it returns {} safely when nothing qualifies. *)
 $tvVirtualNbrs[{vr_, vc_}, L_] :=
-  Reap[
-    Do[
-      If[1 <= qc <= L,
-        Module[{dr = Mod[qr - vr, L], dc = qc - vc, d2},
-          If[dr > L/2, dr -= L];
-          d2 = dr^2 + dc^2;
-          If[1 <= d2 <= 5, Sow[(qr-1)*L + qc]]]],
-      {qr, 1, L}, {qc, 1, L}
-    ]][[2, 1]] /. {} -> {}      (* ensure list even when empty *)
+  Select[Range[L^2], Function[q,
+    With[{qr = Ceiling[q/L], qc = Mod[q-1,L]+1},
+      With[{drRaw = Mod[qr - vr, L], dc = qc - vc},
+        With[{dr = If[2*drRaw > L, drRaw - L, drRaw]},
+          1 <= dr^2 + dc^2 <= 5]]]]]
 
-(* All sites within d²≤5 of site s (cached per site). *)
+(* √5-neighbours of site s (memoised per {s,L}). *)
 $tvNbrs[s_, L_] := $tvNbrs[s,L] =
   $tvVirtualNbrs[{$tvRow[s,L], $tvCol[s,L]}, L]
 
@@ -192,142 +189,121 @@ $tvNbrs[s_, L_] := $tvNbrs[s,L] =
    SECTION 3 — Coupling constants and pair energy
    ================================================================ *)
 
-(* Coupling symbol for type-pair {a,b} at distance label dist.
-   Returns 0 if either type is 0 (hole).  Names:
-     Jd1_<min><max>   (d²=1)
-     Jdsq2_<min><max> (d²=2)
-     Jd2_<min><max>   (d²=4)
-     Jdsq5_<min><max> (d²=5) *)
-$tvSym[a_, b_, prefix_String] :=
+(* Single coupling symbol per type pair: J<min><max>.
+   Identical naming to vmmc_2d.wl — compatible with animate.wls. *)
+$pairJ[a_, b_] :=
   If[a == 0 || b == 0, 0,
-    ToExpression[prefix <> ToString[Min[a,b]] <> ToString[Max[a,b]]]]
+     ToExpression["J" <> ToString[Min[a,b]] <> ToString[Max[a,b]]]]
 
-$tvJd1[a_,b_]   := $tvSym[a, b, "Jd1"]
-$tvJdsq2[a_,b_] := $tvSym[a, b, "Jdsq2"]
-$tvJd2[a_,b_]   := $tvSym[a, b, "Jd2"]
-$tvJdsq5[a_,b_] := $tvSym[a, b, "Jdsq5"]
-
-(* Gradient scale factor at bond-midpoint column xmid. *)
-$tvGamma[xmid_, L_] :=
-  If[$tvGradient, Clip[xmid / L, {0, 1}], 1]
-
-(* Pair energy between a particle of type typeV at virtual position
-   {vr, vc} (vc may be outside [1,L]) and a particle of type typeQ
-   at actual site q.  Same-site → Infinity (hard core). *)
-$tvVPairE[typeV_, {vr_, vc_}, typeQ_, q_, L_] :=
-  Module[{qr = $tvRow[q,L], qc = $tvCol[q,L], dr, dc, d2, g},
-    If[typeV == 0 || typeQ == 0, Return[0]];
-    dc = qc - vc;
-    dr = Mod[qr - vr, L];
-    If[2*dr > L, dr -= L];
-    d2 = dr^2 + dc^2;
-    Which[
-      d2 == 0, Infinity,   (* same site: hard core *)
-      d2 > 5,  0,          (* beyond √5 range *)
-      True,
-        g = $tvGamma[(vc + qc)/2, L];
-        Switch[d2,
-          1, g * $tvJd1[typeV, typeQ],
-          2, g * $tvJdsq2[typeV, typeQ],
-          4, g * $tvJd2[typeV, typeQ],
-          5, g * $tvJdsq5[typeV, typeQ],
-          _, 0]]]
-
-(* DynamicSymParams: returns all symbolic coupling parameters needed for
-   the given component states (called by the DB checker). *)
+(* DynamicSymParams: called once per connected component by the checker. *)
 DynamicSymParams[states_List] :=
   Module[{types = Sort[DeleteCases[Union @@ states, 0]]},
     <|"couplings" ->
       Flatten @ Table[
-        If[a <= b,
-          {$tvSym[a, b, "Jd1"],
-           $tvSym[a, b, "Jdsq2"],
-           $tvSym[a, b, "Jd2"],
-           $tvSym[a, b, "Jdsq5"]},
-          Nothing],
+        If[a < b, $pairJ[a, b], Nothing],
         {a, types}, {b, types}]|>]
+
+(* Gradient scale at bond midpoint column xmid. *)
+$tvGamma[xmid_, L_] :=
+  If[$tvGradient, Clip[xmid / L, {0, 1}], 1]
+
+(* Pair energy: typeV at virtual position {vr,vc} vs typeQ at site q.
+   d²=0 → Infinity (hard core).  d²>5 → 0 (beyond range).
+   d²∈{1,2,4,5} → γ(x_mid) × J_{typeV,typeQ}. *)
+$tvVPairE[typeV_, {vr_, vc_}, typeQ_, q_, L_] :=
+  If[typeV == 0 || typeQ == 0, 0,
+    With[{qr = Ceiling[q/L], qc = Mod[q-1,L]+1},
+      With[{drRaw = Mod[qr - vr, L], dc = qc - vc},
+        With[{dr = If[2*drRaw > L, drRaw - L, drRaw],
+               g = $tvGamma[(vc + qc)/2, L]},
+          With[{d2 = dr^2 + dc^2},
+            Which[
+              d2 == 0, Infinity,
+              d2 > 5,  0,
+              True,    g * $pairJ[typeV, typeQ]]]]]]]
 
 
 (* ================================================================
    SECTION 4 — Energy function
    ================================================================ *)
 
-(* All unique bonds on the L×L column grid at 1 ≤ d² ≤ 5.
+(* Unique undirected bonds at 1 ≤ d² ≤ 5 on the L×L column grid.
    Memoised per L. *)
 $tvUniqueBonds[L_] := $tvUniqueBonds[L] =
   Flatten[
-    Table[
-      If[1 <= $tvD2[s1, s2, L] <= 5, {{s1, s2}}, {}],
-      {s1, L^2}, {s2, s1+1, L^2}],
-    2]
+    Table[If[1 <= $tvD2[s1,s2,L] <= 5, {{s1,s2}}, {}],
+          {s1, L^2}, {s2, s1+1, L^2}], 2]
 
-(* Total energy of a state.  All couplings symbolic; positions numeric. *)
 energy[state_List] :=
   With[{L = Round[Sqrt[Length[state]]]},
     Total @ Map[
       Function[bond,
-        Module[{a = state[[bond[[1]]]], b = state[[bond[[2]]]], d2, g},
+        With[{a = state[[bond[[1]]]], b = state[[bond[[2]]]]},
           If[a == 0 || b == 0, 0,
-            d2 = $tvD2[bond[[1]], bond[[2]], L];
-            g  = $tvGamma[($tvCol[bond[[1]],L] + $tvCol[bond[[2]],L])/2, L];
-            Switch[d2,
-              1, g * $tvJd1[a,b],
-              2, g * $tvJdsq2[a,b],
-              4, g * $tvJd2[a,b],
-              5, g * $tvJdsq5[a,b],
-              _, 0]]]],
+            $tvGamma[($tvCol[bond[[1]],L] + $tvCol[bond[[2]],L])/2, L] *
+            $pairJ[a, b]]]],
       $tvUniqueBonds[L]]]
 
 
 (* ================================================================
-   SECTION 5 — VMMC cluster builder
+   SECTION 5 — Stokes drag helper  (used when $tvStokes = True)
    ================================================================
 
-   Identical structure to vmmc_2d.wl's $vmmcBuildCluster, extended to:
-     • Union of √5-neighbour shells of p, pPost, pRev.
-     • Hard-barrier check: any cluster particle whose forward-virtual
-       site is outside the column → reject immediately (return None).
-     • Optional cluster-size cutoff (drawn before building; checked after).
-     • Optional saturated-link (SL) recruitment gating.
-     • Internal-bond Metropolis filter applied in Algorithm[] after
-       building (needed when $tvGradient = True).
+   Scale factor = R_ref / (R_ref + sqrt(H/n)) following C++ accept().
+   H = sum over cluster of (perpendicular component of delta from CoM)²,
+   where perpendicular to dir = {dr,dc} is given by the 2D cross product:
+     perp_i = (col_i − colCoM) × dr − (row_i − rowCoM) × dc
+   For a single particle H = 0 → scaleFactor = 1 (no rejection).   *)
 
-   Returns a list of cluster site indices on success, or None if any
-   frustrated link is encountered or the hard barrier is violated.
+$tvStokesScale[cluster_, dir_, L_] :=
+  With[{n = Length[cluster],
+        rows = Map[$tvRow[#, L] &, cluster],
+        cols = Map[$tvCol[#, L] &, cluster]},
+    With[{rCoM = Mean[rows], cCoM = Mean[cols]},
+      With[{perp = (cols - cCoM) * dir[[1]] - (rows - rCoM) * dir[[2]]},
+        $tvRefRadius / ($tvRefRadius + Sqrt[Total[perp^2] / n])]]]
+
+
+(* ================================================================
+   SECTION 6 — VMMC cluster builder
+   ================================================================
+
+   Structure is IDENTICAL to $vmmcBuildCluster in vmmc_2d.wl; the
+   only differences are:
+     • √5-neighbour shells (not 1-shells) via $tvVirtualNbrs.
+     • Virtual positions stored as {vr,vc} pairs (vc may be off-grid).
+     • No hard-wall check inside this function — wall is checked in
+       Algorithm after the full cluster is assembled.
+
+   Returns the cluster site list on success, or None on frustrated link.
    ================================================================ *)
 
 $tvBuildCluster[state_, L_, seed_, dir_, slTypes_] :=
   Module[{
-    cluster    = {seed},
-    inCluster  = <|seed -> True|>,
-    queue      = {seed},
+    cluster   = {seed},
+    inCluster = <|seed -> True|>,
+    queue     = {seed},
     frustrated = False,
     p, pType, pRC, pPostRC, pRevRC, nbrs, q, qType,
     eInit, eFwd, eRev, wFwd, wRev, r1, r2
   },
 
-    (* ── Hard barrier: check seed's forward virtual position first ── *)
-    If[$tvHardBarrier && $tvApplyDir[seed, dir, L] === None,
-      Return[None]];
-
     While[queue =!= {} && !frustrated,
 
-      p      = First[queue]; queue = Rest[queue];
-      pType  = state[[p]];
+      p     = First[queue]; queue = Rest[queue];
+      pType = state[[p]];
 
-      (* Virtual (row, col) for forward and reverse moves.
-         Col may go outside [1,L] for reverse moves near the wall;
-         that is intentional — pair energies are still computed
-         (matching C++ behaviour) while the hard barrier blocks actual
-         moves that would go outside. *)
+      (* Virtual positions for p: forward (pPost) and reverse (pRev).
+         Row wraps periodically; col is unconstrained (may be 0 or L+1).
+         These are {vr,vc} pairs, not site indices. *)
       pRC     = {$tvRow[p,L], $tvCol[p,L]};
-      pPostRC = {Mod[pRC[[1]] + dir[[1]] - 1, L] + 1,
-                 pRC[[2]] + dir[[2]]};
-      pRevRC  = {Mod[pRC[[1]] - dir[[1]] - 1, L] + 1,
-                 pRC[[2]] - dir[[2]]};
+      pPostRC = {Mod[pRC[[1]] + dir[[1]] - 1, L] + 1, pRC[[2]] + dir[[2]]};
+      pRevRC  = {Mod[pRC[[1]] - dir[[1]] - 1, L] + 1, pRC[[2]] - dir[[2]]};
 
-      (* Union of √5-neighbour shells of p, pPost, pRev.
-         Handles L=2 wrap-arounds via DeleteDuplicates. *)
+      (* Union of √5-shells of p, pPost, pRev.
+         Any site within √5 of any of these three positions may have a
+         changed pair energy with p and must receive a link test.
+         DeleteDuplicates prevents double-testing (critical for L=2). *)
       nbrs = DeleteDuplicates @ Join[
                $tvNbrs[p, L],
                $tvVirtualNbrs[pPostRC, L],
@@ -338,51 +314,55 @@ $tvBuildCluster[state_, L_, seed_, dir_, slTypes_] :=
         If[state[[q]] =!= 0 && !KeyExistsQ[inCluster, q],
           qType = state[[q]];
 
-          (* SL gating: skip neighbour if its type already in cluster *)
+          (* SL gating: skip if this particle's type is already in cluster *)
           If[$tvProbSL > 0 && $tvSlN0 > 1 &&
-             MemberQ[Keys[slTypes], Mod[qType, $tvSlN0]],
+             KeyExistsQ[slTypes, Mod[qType, $tvSlN0]],
             Continue[]];
 
-          (* Pair energies at current, forward-virtual, reverse-virtual *)
+          (* Three pair energies for the link-weight formula *)
           eInit = $tvVPairE[pType, pRC,     qType, q, L];
           eFwd  = $tvVPairE[pType, pPostRC, qType, q, L];
           eRev  = $tvVPairE[pType, pRevRC,  qType, q, L];
 
-          (* Forward link weight  wFwd = max(1 − exp(β(eInit−eFwd)), 0)
-             Piecewise (not Max) so FullSimplify can resolve sign cases.
-             Leading Infinity guards prevent ComplexInfinity with symbolic β. *)
+          (* wFwd = max(1 − exp(β(eInit−eFwd)), 0).
+             Piecewise — not Max — so FullSimplify can resolve J sign cases.
+             Leading Infinity guards prevent ComplexInfinity with symbolic β.
+             (Identical logic to vmmc_2d.wl.) *)
           wFwd = Piecewise[{
-              {1,                                eFwd === Infinity},
-              {1 - Exp[\[Beta] (eInit - eFwd)],  eInit < eFwd}},
+              {1,                               eFwd === Infinity},
+              {1 - Exp[\[Beta](eInit - eFwd)],  eInit < eFwd}},
             0];
           wRev = Piecewise[{
-              {1,                                eRev === Infinity},
-              {1 - Exp[\[Beta] (eInit - eRev)],  eInit < eRev}},
+              {1,                               eRev === Infinity},
+              {1 - Exp[\[Beta](eInit - eRev)],  eInit < eRev}},
             0];
 
           r1 = RandomReal[];
           If[r1 <= wFwd,
             r2 = RandomReal[];
             If[r2 > Piecewise[{
-                  {1, eFwd===Infinity && eRev===Infinity},
-                  {1 - Exp[\[Beta](eInit-eRev)],
-                      eFwd===Infinity && eInit < eRev},
-                  {0, eFwd===Infinity},
-                  {1, eRev===Infinity && eInit < eFwd},
+                  {1,
+                      eFwd === Infinity && eRev === Infinity},
+                  {1 - Exp[\[Beta](eInit - eRev)],
+                      eFwd === Infinity && eInit < eRev},
+                  {0,
+                      eFwd === Infinity},
+                  {1,
+                      eRev === Infinity && eInit < eFwd},
                   {Min[(1-Exp[\[Beta](eInit-eRev)]) /
-                       (1-Exp[\[Beta](eInit-eFwd)]), 1],
+                        (1-Exp[\[Beta](eInit-eFwd)]), 1],
                       eInit < eFwd && eInit < eRev},
-                  {0, eInit < eFwd}},
+                  {0,
+                      eInit < eFwd}},
                 0],
-              (* Frustrated link → reject entire move *)
+              (* Frustrated link: reject entire move *)
               frustrated = True; Break[],
 
-              (* Hard barrier: reject if new member q can't move forward *)
-              If[$tvHardBarrier && $tvApplyDir[q, dir, L] === None,
-                frustrated = True; Break[]];
-
+              (* Link accepted: q joins the cluster *)
               AppendTo[cluster, q];
               inCluster[q] = True;
+              If[$tvProbSL > 0 && $tvSlN0 > 1,
+                AssociateTo[slTypes, Mod[qType, $tvSlN0] -> True]];
               AppendTo[queue, q]
             ]
           ]
@@ -396,102 +376,112 @@ $tvBuildCluster[state_, L_, seed_, dir_, slTypes_] :=
 
 
 (* ================================================================
-   SECTION 6 — Algorithm
+   SECTION 7 — Algorithm
    ================================================================ *)
 
 Algorithm[state_List] :=
   Module[{
-    L, occupied, seed, dirs, dir, isSL, slTypes,
-    cutOff, cluster, newState, dE, dEInt,
-    clusterRC, newRC, a, b, ePre, ePost
+    L, occupied, seed, dirs, dir, slTypes, cutOff,
+    cluster, newState, dE, dEInt, sA, sB, destA, destB, ePre, ePost
   },
 
     L = Round[Sqrt[Length[state]]];
 
-    (* Select a random occupied site as the seed *)
     occupied = Flatten[Position[state, _?(# > 0 &)]];
     If[occupied === {}, Return[state]];
     seed = RandomChoice[occupied];
 
-    (* Choose one of the four cardinal directions.
-       Only cardinal moves are used (matching C++ lattice VMMC with 4 neighbours).
-       Diagonal / extended-range moves are handled via the link weights. *)
-    dirs = {{0,1}, {0,-1}, {1,0}, {-1,0}};    (* right, left, down, up *)
+    (* Four cardinal directions: {dr, dc} = row-change, col-change. *)
+    dirs = {{0,1}, {0,-1}, {1,0}, {-1,0}};
     dir  = RandomChoice[dirs];
 
-    (* ── Optional: Saturated-link mode ───────────────────────────── *)
-    isSL = ($tvProbSL > 0) && (RandomReal[] < $tvProbSL);
-    slTypes = If[isSL && $tvSlN0 > 1,
+    (* ── Hard-wall pre-check: seed destination outside column? ────────
+       No random bits consumed — pure geometry. *)
+    If[$tvHardBarrier && $tvApplyDir[seed, dir, L] === None,
+      Return[state]];
+
+    (* ── Optional: cluster-size cutoff  (C++ proposeMove) ────────────
+       Draw cutOff = ⌊1/r⌋ before building to match C++ RNG ordering. *)
+    cutOff = If[$tvCutoff,
+               With[{r = RandomReal[]}, If[r == 0, Infinity, Floor[1/r]]],
+               Infinity];
+
+    (* ── Optional: saturated-link mode ───────────────────────────────
+       Seed's own type is pre-loaded into slTypes. *)
+    slTypes = If[$tvProbSL > 0 && $tvSlN0 > 1 && RandomReal[] < $tvProbSL,
                  <|Mod[state[[seed]], $tvSlN0] -> True|>,
                  <||>];
 
-    (* ── Optional: cluster-size cutoff (draw before building) ─────── *)
-    cutOff = If[$tvCutoff,
-               Module[{r = RandomReal[]},
-                 If[r == 0, Infinity, Floor[1/r]]],
-               Infinity];
-
-    (* ── Build the VMMC cluster ───────────────────────────────────── *)
+    (* ── Grow the VMMC cluster ────────────────────────────────────── *)
     cluster = $tvBuildCluster[state, L, seed, dir, slTypes];
-    If[cluster === None, Return[state]];    (* frustrated or boundary *)
+    If[cluster === None, Return[state]];    (* frustrated link *)
 
-    (* ── Apply cluster-size cutoff ────────────────────────────────── *)
+    (* ── Hard-wall check for all cluster members ──────────────────────
+       Done here (after building, before any move) so NO random bits are
+       consumed by a wall rejection.  Superdetailed balance is intact
+       because this is a deterministic per-cluster-geometry check. *)
+    If[$tvHardBarrier &&
+       AnyTrue[cluster, $tvApplyDir[#, dir, L] === None &],
+      Return[state]];
+
+    (* ── Cluster-size cutoff check ────────────────────────────────── *)
     If[Length[cluster] > cutOff, Return[state]];
 
-    (* ── Apply the rigid cluster translation ─────────────────────── *)
+    (* ── Optional: Stokes drag rejection ─────────────────────────────
+       scaleFactor = R_ref / (R_ref + sqrt(H/n)).  For single particles
+       scaleFactor = 1 (never rejected).  Drawn after cutoff for C++ fidelity. *)
+    If[$tvStokes && Length[cluster] > 1,
+      If[RandomReal[] > $tvStokesScale[cluster, dir, L],
+        Return[state]]];
+
+    (* ── Apply rigid cluster translation ─────────────────────────── *)
     newState = state;
-    Do[newState[[cluster[[i]]]] = 0,       {i, Length[cluster]}];
+    Do[newState[[cluster[[i]]]] = 0, {i, Length[cluster]}];
     Do[
       With[{dest = $tvApplyDir[cluster[[i]], dir, L]},
-        If[dest === None, Return[state, Module]];         (* should not happen: hard barrier already checked *)
-        If[newState[[dest]] =!= 0, Return[state, Module]]; (* overlap *)
-        newState[[dest]] = state[[cluster[[i]]]]
-      ],
-      {i, Length[cluster]}
-    ];
+        (* dest = None cannot happen: hard-wall check above ensures safety *)
+        If[newState[[dest]] =!= 0, Return[state, Module]];   (* overlap *)
+        newState[[dest]] = state[[cluster[[i]]]]],
+      {i, Length[cluster]}];
 
     (* ── Internal-bond Metropolis filter ─────────────────────────────
-       Required for detailed balance when interactions are spatially
-       varying (gradient active).  Computes ΔE over all moving-moving
-       pairs and applies min(1, exp(−βΔE)).
-       For uniform coupling ($tvGradient=False) every term is zero
-       (translation-invariant energy), so this is always a no-op.
-       MetropolisProb is called unconditionally for checker compliance.
-       ─────────────────────────────────────────────────────────────── *)
-    dEInt = Total @ Flatten @ Table[
-      Module[{
-        sA = cluster[[a]], sB = cluster[[b]],
-        rcA = {$tvRow[cluster[[a]], L], $tvCol[cluster[[a]], L]},
-        rcB = {$tvRow[cluster[[b]], L], $tvCol[cluster[[b]], L]},
-        rcANew, rcBNew},
-        rcANew = {Mod[rcA[[1]] + dir[[1]] - 1, L] + 1, rcA[[2]] + dir[[2]]};
-        rcBNew = {Mod[rcB[[1]] + dir[[1]] - 1, L] + 1, rcB[[2]] + dir[[2]]};
-        ePre  = $tvVPairE[state[[sA]], rcA,    state[[sB]], sB, L];
-        ePost = $tvVPairE[state[[sA]], rcANew, state[[sB]],
-                  (* site index of new position of B *)
-                  (rcBNew[[1]] - 1)*L + rcBNew[[2]], L];
-        If[ePre > 1*^5 || ePost > 1*^5, 0, ePost - ePre]
-      ],
-      {a, Length[cluster]}, {b, a+1, Length[cluster]}];
+       Needed for DB when $tvGradient = True:
+         ΔE_int = Σ_{a<b in cluster} [E_post(a,b) − E_pre(a,b)]
+       The pair energies E_pre/E_post use the γ-scaled coupling.
+       For $tvGradient = False:  every ΔE = 0, no random bit consumed.
+       For $tvGradient = True:   one RandomReal[] drawn via MetropolisProb. *)
+    If[$tvGradient,
+      dEInt = Total @ Flatten @ Table[
+        Module[{
+          sA = cluster[[a]], sB = cluster[[b]],
+          rcA, rcB, destA, destB, ePre2, ePost2},
+          rcA   = {$tvRow[sA,L], $tvCol[sA,L]};
+          rcB   = {$tvRow[sB,L], $tvCol[sB,L]};
+          destA = $tvApplyDir[sA, dir, L];
+          destB = $tvApplyDir[sB, dir, L];
+          ePre2  = $tvVPairE[state[[sA]], rcA,
+                             state[[sB]], sB,    L];
+          ePost2 = $tvVPairE[state[[sA]], {$tvRow[destA,L],$tvCol[destA,L]},
+                             state[[sB]], destB,  L];
+          If[ePre2 > 1*^5 || ePost2 > 1*^5, 0, ePost2 - ePre2]
+        ],
+        {a, Length[cluster]}, {b, a+1, Length[cluster]}];
+      If[RandomReal[] >= MetropolisProb[dEInt], Return[state]]];
 
-    (* MetropolisProb[dEInt] = min(1, exp(−β dEInt)).
-       If dEInt=0 (no gradient), this equals 1 and the RandomReal[]
-       comparison below is always satisfied (no rejection). *)
-    If[RandomReal[] >= MetropolisProb[dEInt], Return[state]];
-
-    (* ── Final energy delta (for interface; VMMC DB is link-enforced) *)
+    (* ── Final energy change (no-op acceptance; VMMC DB is link-enforced)
+       MetropolisProb[dE] is called for checker interface compliance but
+       no RandomReal[] is drawn here — the result is discarded. *)
     dE = energy[newState] - energy[state];
-    MetropolisProb[dE];   (* called for checker interface compliance *)
+    MetropolisProb[dE];
 
     newState
   ]
 
 
 (* ================================================================
-   SECTION 7 — Checker interface   (same structure as vmmc_2d.wl)
+   SECTION 8 — Checker interface   (identical to vmmc_2d.wl)
    ================================================================ *)
 
-(* Accept only IDs whose decoded array has perfect-square length (L×L). *)
 BitsToState[bits_List] :=
   Module[{id = FromDigits[bits, 2], state, sqrtM},
     If[id == 0, Return[None]];
@@ -500,7 +490,6 @@ BitsToState[bits_List] :=
     If[!IntegerQ[sqrtM], Return[None]];
     state]
 
-(* Display state as a grid: {1,2}|{3,0} for a 2×2 state *)
 DisplayState[state_List] :=
   With[{L = Round[Sqrt[Length[state]]]},
     StringJoin @ Riffle[
@@ -508,8 +497,6 @@ DisplayState[state_List] :=
             {r, 1, L}],
       "|"]]
 
-(* Return all integer IDs that decode to L×L (perfect-square) arrays
-   with ID ≤ maxId.  Identical to vmmc_2d.wl. *)
 ValidStateIDs[maxId_Integer] :=
   Module[{L = 1, ids = {}},
     While[$cLPre[L^2] <= maxId,

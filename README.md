@@ -138,7 +138,7 @@ See `template.wl` for a fully annotated starting point.
 | `kawasaki_1d.wl` | 1D Kawasaki (nearest-neighbour swap) on a periodic ring. Labeled particles, symmetric proposal via `RandomInteger[{0, L-1}]` for bond selection, Metropolis acceptance. |
 | `kawasaki_2d.wl` | 2D Kawasaki on a periodic square lattice. Uses `RandomInteger` for bond selection and `RandomReal[]` for Metropolis acceptance. |
 | `vmmc_2d.wl` | Virtual Move Monte Carlo (Whitelam–Geissler) cluster moves on a 2D lattice. Uses `RandomChoice[occupied]`, `RandomChoice[dirs]`, and multiple symbolic `RandomReal[]` comparisons against link-formation probabilities. |
-| `vmmc_2d_thesis.wl` | **Chapter 2 column VMMC**: extends `vmmc_2d.wl` to the condensate-column geometry from Sam Whitby's PhD thesis (Chapter2/src/VMMC.cpp + NucleolusModel.cpp). Key differences from `vmmc_2d.wl`: (1) hard wall in the x/column direction (periodic only in y/row direction); (2) four coupling ranges — d=1, √2, 2, √5 — each with independent symbolic coupling constants (`Jd1_ab`, `Jdsq2_ab`, `Jd2_ab`, `Jdsq5_ab`); (3) optional linear chemical gradient γ(x_mid) = x_mid/L scaling all weak couplings; (4) optional cluster-size cutoff ⌊1/r⌋ (matching C++ proposeMove); (5) optional saturated-link (SL) moves; (6) internal-bond Metropolis filter for detailed balance with spatially-varying energies. Default settings (`$tvHardBarrier=True`, `$tvGradient=False`, `$tvCutoff=False`, `$tvProbSL=0`) are designed for the symbolic DB check. **DB check result: pending** — see commands below. |
+| `vmmc_2d_thesis.wl` | **Chapter 2 column VMMC**: extends `vmmc_2d.wl` to the condensate-column geometry from Sam Whitby's PhD thesis (Chapter2/src/VMMC.cpp + NucleolusModel.cpp). Hard wall in x, periodic in y; interactions at d=1,√2,2,√5 all sharing a single coupling symbol `J<a><b>` per type pair; optional chemical gradient γ(x_mid)=x_mid/L; optional cluster-size cutoff, SL moves, and Stokes drag; internal-bond Metropolis filter for DB correctness with gradient. **DB check result: PASS** — symbolic + numerical (KL < 0.01) for all states up to `MaxBitString=111111` with default settings (`$tvHardBarrier=True`, `$tvGradient=False`). |
 | `jump_1d_edit.wl` | 1D jump dynamics: a particle jumps by a displacement `d` drawn via **rejection sampling** (uniform `RandomInteger[{0,L-1}]`, then thinned by `RandomReal[] >= w(d)/w(0)`) to implement a discrete normal distribution. Symmetric proposal, Metropolis acceptance. |
 | `jump_1d_weighted.wl` | Same jump dynamics as `jump_1d_edit.wl`, but the displacement is drawn **directly** via `RandomChoice[normalWeights -> displacements]`. This is the canonical test of the new weighted-`RandomChoice` support (Approach 3). Both implementations are mathematically equivalent and both pass detailed balance. |
 
@@ -169,7 +169,7 @@ function to match the column physics:
 |---------|-------------|---------------------|
 | Boundary conditions | fully periodic (torus) | periodic in y (rows), hard wall in x (cols) |
 | Interaction range | d=1 (nearest neighbour) | d=1, √2, 2, √5 |
-| Coupling symbols | `J_ab` (one per type pair) | `Jd1_ab`, `Jdsq2_ab`, `Jd2_ab`, `Jdsq5_ab` |
+| Coupling symbols | `J_ab` (one per type pair) | `J_ab` per type pair, applied at all four distance ranges |
 | Chemical gradient | none | optional `γ(x_mid)=x_mid/L` |
 | Cluster-size cutoff | none | optional `⌊1/r⌋` (C++ proposeMove) |
 | Saturated-link moves | none | optional, probability `$tvProbSL` |
@@ -188,12 +188,18 @@ filter applies `min(1, exp(−β ΔE_int))` to compensate.  For uniform coupling
 
 ### How to run the detailed-balance check
 
-Default (uniform coupling, no gradient, no cutoff, hard barrier):
+Default (uniform coupling, no gradient, no cutoff, hard barrier) — **PASS** confirmed:
 
 ```bash
 cd CheckDetailedBalance2
 wolframscript -file check.wls examples3/vmmc_2d_thesis.wl \
-  MaxBitString=1111111 Mode=Both NSteps=20000
+  MaxBitString=111111 Mode=Both NSteps=20000
+```
+
+To view the full decision tree and transition matrix for a specific state (e.g. the 3-particle, 4-site system):
+
+```bash
+wolframscript -file report.wls examples3/vmmc_2d_thesis.wl BitString=101001
 ```
 
 With gradient (tests the internal-bond Metropolis filter):
