@@ -1438,33 +1438,40 @@ MakeDBTable[allStates_List, violations_] := Module[
 
 (* ----------------------------------------------------------------
    MakeFrequencyPanel
-   Bar chart of simulated vs Boltzmann frequencies + KL verdict.
+   Scatter plot of simulated vs Boltzmann frequencies with a y=x
+   reference line and Pearson correlation coefficient.
+   x-axis: theoretical (Boltzmann) frequency.
+   y-axis: simulated (MCMC) frequency.
    ---------------------------------------------------------------- *)
 MakeFrequencyPanel[allStates_List, simFreq_Association,
                    bw_Association, kl_Real] := Module[
-  {labels, simD, bwD, pass, chart, verdict},
-  labels = ToString /@ allStates;
-  simD   = N @ simFreq[#] & /@ allStates;
-  bwD    = N @ bw[#]      & /@ allStates;
-  pass   = kl < 0.02;
-  chart  = BarChart[
-    Table[{simD[[i]], bwD[[i]]}, {i, Length[allStates]}],
-    ChartLabels  -> {Placed[labels, Below],
-                     Placed[{"Simulated", "Boltzmann"}, Above]},
-    ChartStyle   -> {Directive[RGBColor[0.20,0.45,0.80], Opacity[0.85]],
-                     Directive[RGBColor[0.82,0.22,0.18], Opacity[0.85]]},
-    ChartLegends -> Placed[{"Simulated", "Boltzmann"}, {Right, Top}],
-    AxesLabel    -> {None, "Probability"},
-    PlotLabel    -> Style["Simulated vs Boltzmann state frequencies", 12, Bold],
-    ImageSize    -> {520, 300},
-    Background   -> White];
+  {simD, bwD, pass, pearson, maxVal, plot, verdict},
+  simD    = N[simFreq[#]] & /@ allStates;
+  bwD     = N[bw[#]]      & /@ allStates;
+  pass    = kl < 0.02;
+  pearson = If[Length[allStates] > 1 && StandardDeviation[bwD] > 0,
+               Correlation[simD, bwD], 1.];
+  maxVal  = Max[Max[simD], Max[bwD]] * 1.15;
+  plot = Show[
+    ListPlot[
+      Transpose[{bwD, simD}],
+      PlotStyle  -> Directive[RGBColor[0.20, 0.45, 0.80], PointSize[0.018]],
+      AxesLabel  -> {Style["Theoretical frequency", 10],
+                     Style["Simulated frequency",   10]},
+      PlotLabel  -> Style["Simulated vs Boltzmann state frequencies", 12, Bold],
+      PlotRange  -> {{0, maxVal}, {0, maxVal}},
+      AspectRatio -> 1,
+      ImageSize  -> {380, 380},
+      Background -> White],
+    Graphics[{Dashed, GrayLevel[0.55],
+              Line[{{0, 0}, {maxVal, maxVal}}]}]];
   verdict = Style[
-    "KL divergence (sim \[DoubleVerticalBar] Boltzmann) = " <>
-    ToString[NumberForm[kl,{5,4}]] <> "     " <>
+    "Pearson r = " <> ToString[NumberForm[pearson, {5, 4}]] <>
+    "     KL = " <> ToString[NumberForm[kl, {5, 4}]] <> "     " <>
     If[pass, "\[Checkmark] Consistent with Boltzmann",
              "\[Times] Significant deviation from Boltzmann"],
     11, Bold, If[pass, Darker[Green], Red]];
-  Column[{chart, Spacer[6], verdict}, Alignment -> Left, Spacings -> 0.3]
+  Column[{plot, Spacer[6], verdict}, Alignment -> Left, Spacings -> 0.3]
 ]
 
 

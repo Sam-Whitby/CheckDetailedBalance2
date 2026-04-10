@@ -378,16 +378,19 @@ ValidStateIDs[maxId_Integer] :=
 DynamicSymParams[states_List] :=
   Module[{types = Sort[DeleteCases[Union @@ states, 0]],
           L = Round[Sqrt[Length[First[states]]]]},
+    (* Both coupling symbols and field symbols go under "couplings" so that
+       check.wls / report.wls (which only read "eps" and "couplings") assign
+       all of them numeric values during the numerical MCMC run. *)
     <|"couplings" ->
-        Flatten @ Table[
-          If[a < b,
-            {ToExpression["Jd1"   <> ToString[a] <> ToString[b]],
-             ToExpression["Jdsq2" <> ToString[a] <> ToString[b]],
-             ToExpression["Jd2"   <> ToString[a] <> ToString[b]],
-             ToExpression["Jdsq5" <> ToString[a] <> ToString[b]]},
-            Nothing],
-          {a, types}, {b, types}],
-      "fields" ->
-        Table[ToExpression["Phi" <> ToString[s]], {s, L^2}]|>]
+        Join[
+          Flatten @ Table[
+            If[a < b,
+              {ToExpression["Jd1"   <> ToString[a] <> ToString[b]],
+               ToExpression["Jdsq2" <> ToString[a] <> ToString[b]],
+               ToExpression["Jd2"   <> ToString[a] <> ToString[b]],
+               ToExpression["Jdsq5" <> ToString[a] <> ToString[b]]},
+              Nothing],
+            {a, types}, {b, types}],
+          Table[ToExpression["Phi" <> ToString[s]], {s, L^2}]]|>]
 
 numBeta = 1
