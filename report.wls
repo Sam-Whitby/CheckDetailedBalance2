@@ -14,6 +14,7 @@
      ShowTrees=True/False   Include decision trees in report (default True)
      ShowT=True/False       Include transition matrix in report (default True)
      DoNumerical=True/False Run numerical MCMC and include frequency plot (default True)
+     PrintMatrix=True/False Print transition matrix as LaTeX to terminal (default False)
    ================================================================ *)
 
 scriptDir = DirectoryName[$InputFileName];
@@ -44,6 +45,7 @@ If[Length[posArgs] < 1,
   Print["  ShowTrees=True/False   Include decision trees (default True)"];
   Print["  ShowT=True/False       Include transition matrix (default True)"];
   Print["  DoNumerical=True/False Run numerical MCMC + frequency plot (default True)"];
+  Print["  PrintMatrix=True/False Print transition matrix as LaTeX to terminal (default False)"];
   Exit[1]];
 
 (* ---- Option defaults ---- *)
@@ -54,6 +56,7 @@ verbose      = False;
 showTrees    = True;
 showT        = True;
 doNumerical  = True;
+printMatrix  = False;
 
 Do[
   If[StringMatchQ[opt, "BitString="   ~~ __], bitStringArg = StringDrop[opt, 10]];
@@ -62,7 +65,8 @@ Do[
   If[StringMatchQ[opt, "Verbose="     ~~ __], verbose      = ToExpression[StringDrop[opt,  8]]];
   If[StringMatchQ[opt, "ShowTrees="   ~~ __], showTrees    = ToExpression[StringDrop[opt, 10]]];
   If[StringMatchQ[opt, "ShowT="       ~~ __], showT        = ToExpression[StringDrop[opt,  6]]];
-  If[StringMatchQ[opt, "DoNumerical=" ~~ __], doNumerical  = ToExpression[StringDrop[opt, 12]]],
+  If[StringMatchQ[opt, "DoNumerical=" ~~ __], doNumerical  = ToExpression[StringDrop[opt, 12]]];
+  If[StringMatchQ[opt, "PrintMatrix=" ~~ __], printMatrix  = ToExpression[StringDrop[opt, 12]]],
   {opt, kvArgs}];
 
 If[bitStringArg === None,
@@ -150,6 +154,22 @@ violations = CheckDetailedBalance[matrix, allStates, $energy, compSymAssumptions
 If[violations === {},
   Print["Symbolic: PASS"],
   Print["Symbolic: FAIL -- ", Length[violations], " violation(s) found."]];
+
+(* ---- Print transition matrix as LaTeX (if PrintMatrix=True) ---- *)
+If[printMatrix,
+  Print["\n--- Transition matrix T[i -> j]  (LaTeX) ---"];
+  Print["States: ", allStates];
+  Print[];
+  Do[
+    Do[
+      With[{entry = Lookup[matrix, Key[{si, sj}], 0]},
+        If[entry =!= 0,
+          Print["T[", si, " -> ", sj, "] ="];
+          Print[ToString[TeXForm[entry]]];
+          Print[]]],
+      {sj, allStates}],
+    {si, allStates}];
+  Print["--- end of transition matrix ---\n"]];
 
 (* ---- Numerical MCMC check (skipped if DoNumerical=False) ---- *)
 If[doNumerical,
