@@ -1110,19 +1110,23 @@ ExportAndShowPython[args_Association] := Module[
    ---------------------------------------------------------------- *)
 ExportReportNotebook[args_Association] := Module[
   {name, allStates, treeData, matrix, violations, simFreq, bw, kl, algCode,
-   pass, badge, trees, treeGrid, matGrid, dbTab, freqPanel, cells, nb,
+   showTrees, showT, doNumerical,
+   pass, badge, treeGrid, matGrid, dbTab, freqPanel, cells, nb,
    safeName, nbPath},
 
-  name       = args["name"];
-  allStates  = args["allStates"];
-  treeData   = args["treeData"];
-  matrix     = args["matrix"];
-  violations = If[ListQ[args["violations"]], args["violations"], {}];
-  simFreq    = args["simFreq"];
-  bw         = args["bw"];
-  kl         = args["kl"];
-  algCode    = args["algCode"];
-  pass       = violations === {};
+  name        = args["name"];
+  allStates   = args["allStates"];
+  treeData    = args["treeData"];
+  matrix      = args["matrix"];
+  violations  = If[ListQ[args["violations"]], args["violations"], {}];
+  simFreq     = args["simFreq"];
+  bw          = args["bw"];
+  kl          = args["kl"];
+  algCode     = args["algCode"];
+  showTrees   = Lookup[args, "showTrees",   True];
+  showT       = Lookup[args, "showT",       True];
+  doNumerical = Lookup[args, "doNumerical", True];
+  pass        = violations === {};
 
   badge = Panel[
     Row[{
@@ -1137,64 +1141,73 @@ ExportReportNotebook[args_Association] := Module[
     Background -> GrayLevel[0.94],
     FrameMargins -> {{16,16},{12,12}}];
 
-  trees = Table[
-    Framed[
-      Column[{DrawStateTree[s, $normLeaf /@ treeData[s]]}, Alignment -> Center],
-      FrameStyle -> GrayLevel[0.82], RoundingRadius -> 5,
-      Background -> GrayLevel[0.975], FrameMargins -> 8],
-    {s, allStates}];
+  (* Only build the sections that are requested *)
+  If[showTrees,
+    treeGrid = Grid[
+      Partition[
+        Table[
+          Framed[
+            Column[{DrawStateTree[s, $normLeaf /@ treeData[s]]}, Alignment -> Center],
+            FrameStyle -> GrayLevel[0.82], RoundingRadius -> 5,
+            Background -> GrayLevel[0.975], FrameMargins -> 8],
+          {s, allStates}],
+        UpTo[3]],
+      Spacings -> {2, 2}, Alignment -> {Left, Top}]];
 
-  (* At most 3 trees per row -- prevents horizontal overflow *)
-  treeGrid = Grid[Partition[trees, UpTo[3]], Spacings -> {2, 2}, Alignment -> {Left, Top}];
+  If[showT,    matGrid   = MakeTransitionGrid[allStates, matrix]];
+               dbTab     = MakeDBTable[allStates, violations];
+  If[doNumerical, freqPanel = MakeFrequencyPanel[allStates, simFreq, bw, kl]];
 
-  matGrid   = MakeTransitionGrid[allStates, matrix];
-  dbTab     = MakeDBTable[allStates, violations];
-  freqPanel = MakeFrequencyPanel[allStates, simFreq, bw, kl];
-
-  cells = {
+  cells = Flatten @ {
     Cell[BoxData @ ToBoxes @ badge,
          "Output", CellMargins -> {{8,8},{4,14}}],
 
     Cell["Algorithm Under Test", "Section"],
     Cell[algCode, "Code"],
 
-    Cell["Decision Trees  (Symbolic Execution Paths)", "Section"],
-    Cell[TextData[{
-      "Each tree shows all bit sequences the algorithm can consume from a \
+    If[showTrees, {
+      Cell["Decision Trees  (Symbolic Execution Paths)", "Section"],
+      Cell[TextData[{
+        "Each tree shows all bit sequences the algorithm can consume from a \
 given starting state.  ",
-      StyleBox["Blue", FontWeight->"Bold",
-               FontColor->RGBColor[0.22,0.42,0.70]],
-      " = root / internal bit-choice node.  ",
-      StyleBox["Green", FontWeight->"Bold", FontColor->Darker[Green,0.2]],
-      " outcome = moved to a new state.  ",
-      StyleBox["Orange", FontWeight->"Bold", FontColor->Darker[Orange,0.1]],
-      " outcome = stayed.  Edge labels are bit values (0/1).  \
+        StyleBox["Blue", FontWeight->"Bold",
+                 FontColor->RGBColor[0.22,0.42,0.70]],
+        " = root / internal bit-choice node.  ",
+        StyleBox["Green", FontWeight->"Bold", FontColor->Darker[Green,0.2]],
+        " outcome = moved to a new state.  ",
+        StyleBox["Orange", FontWeight->"Bold", FontColor->Darker[Orange,0.1]],
+        " outcome = stayed.  Edge labels are bit values (0/1).  \
 Hover over an outcome node to see the exact path weight."
-    }], "Text"],
-    Cell[BoxData @ ToBoxes @ treeGrid,
-         "Output", CellMargins -> {{8,8},{4,4}}],
+      }], "Text"],
+      Cell[BoxData @ ToBoxes @ treeGrid,
+           "Output", CellMargins -> {{8,8},{4,4}}]
+    }, Nothing],
 
-    Cell["Symbolic Transition Matrix  T[ i \[Rule] j ]", "Section"],
-    Cell["Entry (i, j) = total probability of transitioning FROM state i \
+    If[showT, {
+      Cell["Symbolic Transition Matrix  T[ i \[Rule] j ]", "Section"],
+      Cell["Entry (i, j) = total probability of transitioning FROM state i \
 TO state j, accumulated over all execution paths.  \[Beta] is kept \
 symbolic throughout.", "Text"],
-    Cell[BoxData @ ToBoxes @ matGrid,
-         "Output", CellMargins -> {{8,8},{4,4}}],
+      Cell[BoxData @ ToBoxes @ matGrid,
+           "Output", CellMargins -> {{8,8},{4,4}}]
+    }, Nothing],
 
-    Cell["Detailed Balance Check:  \
+    {Cell["Detailed Balance Check:  \
 T(i\[Rule]j)\[CenterDot]\[Pi](i) = T(j\[Rule]i)\[CenterDot]\[Pi](j)",
-         "Section"],
+           "Section"],
     Cell["Every pair of distinct states is tested using FullSimplify with \
 \[Beta] > 0.  \[Pi](s) = Exp[\[Minus]\[Beta] E(s)].", "Text"],
     Cell[BoxData @ ToBoxes @ dbTab,
-         "Output", CellMargins -> {{8,8},{4,4}}],
+         "Output", CellMargins -> {{8,8},{4,4}}]},
 
-    Cell["Numerical MCMC Validation", "Section"],
-    Cell["The algorithm is run as a live Markov chain with genuinely random \
+    If[doNumerical, {
+      Cell["Numerical MCMC Validation", "Section"],
+      Cell["The algorithm is run as a live Markov chain with genuinely random \
 bits.  Simulated state frequencies are compared to the analytical Boltzmann \
 distribution Exp[\[Minus]\[Beta]E(s)] / Z.", "Text"],
-    Cell[BoxData @ ToBoxes @ freqPanel,
-         "Output", CellMargins -> {{8,8},{4,18}}]
+      Cell[BoxData @ ToBoxes @ freqPanel,
+           "Output", CellMargins -> {{8,8},{4,18}}]
+    }, Nothing]
   };
 
   nb = Notebook[cells,

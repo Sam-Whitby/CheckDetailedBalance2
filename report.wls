@@ -7,10 +7,13 @@
      wolframscript -file report.wls <alg_file> BitString=XXXXX [options]
 
    Options (key=value, no spaces around =):
-     BitString=XXXXX    Bit string seed (required, e.g. BitString=11101)
-     NSteps=N           MCMC steps for numerical check (default 50000)
-     MaxBitDepth=N      BFS tree depth cap (default 20)
-     Verbose=True/False Print per-state BFS progress (default False)
+     BitString=XXXXX        Bit string seed (required, e.g. BitString=11101)
+     NSteps=N               MCMC steps for numerical check (default 50000)
+     MaxBitDepth=N          BFS tree depth cap (default 20)
+     Verbose=True/False     Print per-state BFS progress (default False)
+     ShowTrees=True/False   Include decision trees in report (default True)
+     ShowT=True/False       Include transition matrix in report (default True)
+     DoNumerical=True/False Run numerical MCMC and include frequency plot (default True)
    ================================================================ *)
 
 scriptDir = DirectoryName[$InputFileName];
@@ -34,10 +37,13 @@ If[Length[posArgs] < 1,
   Print["  numBeta              numeric inverse temperature"];
   Print[""];
   Print["Options (key=value, no spaces around =):"];
-  Print["  BitString=XXXXX    Bit string seed (required)"];
-  Print["  NSteps=N           MCMC steps (default 50000)"];
-  Print["  MaxBitDepth=N      BFS depth cap (default 20)"];
-  Print["  Verbose=True/False Per-state BFS output (default False)"];
+  Print["  BitString=XXXXX        Bit string seed (required)"];
+  Print["  NSteps=N               MCMC steps (default 50000)"];
+  Print["  MaxBitDepth=N          BFS depth cap (default 20)"];
+  Print["  Verbose=True/False     Per-state BFS output (default False)"];
+  Print["  ShowTrees=True/False   Include decision trees (default True)"];
+  Print["  ShowT=True/False       Include transition matrix (default True)"];
+  Print["  DoNumerical=True/False Run numerical MCMC + frequency plot (default True)"];
   Exit[1]];
 
 (* ---- Option defaults ---- *)
@@ -45,12 +51,18 @@ bitStringArg = None;
 nSteps       = 50000;
 maxBitDepth  = 20;
 verbose      = False;
+showTrees    = True;
+showT        = True;
+doNumerical  = True;
 
 Do[
   If[StringMatchQ[opt, "BitString="   ~~ __], bitStringArg = StringDrop[opt, 10]];
   If[StringMatchQ[opt, "NSteps="      ~~ __], nSteps       = ToExpression[StringDrop[opt,  7]]];
   If[StringMatchQ[opt, "MaxBitDepth=" ~~ __], maxBitDepth  = ToExpression[StringDrop[opt, 12]]];
-  If[StringMatchQ[opt, "Verbose="     ~~ __], verbose      = ToExpression[StringDrop[opt,  8]]],
+  If[StringMatchQ[opt, "Verbose="     ~~ __], verbose      = ToExpression[StringDrop[opt,  8]]];
+  If[StringMatchQ[opt, "ShowTrees="   ~~ __], showTrees    = ToExpression[StringDrop[opt, 10]]];
+  If[StringMatchQ[opt, "ShowT="       ~~ __], showT        = ToExpression[StringDrop[opt,  6]]];
+  If[StringMatchQ[opt, "DoNumerical=" ~~ __], doNumerical  = ToExpression[StringDrop[opt, 12]]],
   {opt, kvArgs}];
 
 If[bitStringArg === None,
@@ -139,41 +151,46 @@ If[violations === {},
   Print["Symbolic: PASS"],
   Print["Symbolic: FAIL -- ", Length[violations], " violation(s) found."]];
 
-(* ---- Numerical MCMC check ---- *)
-Print["Running numerical MCMC (", nSteps, " steps) ..."];
-allBlockVars = Union[compSymVars, $fixedSymVars];
-If[allBlockVars =!= {},
-  SeedRandom[42];
-  compNumVals = If[compSymVars =!= {}, RandomReal[{-1, 1}, Length[compSymVars]], {}];
-  Block[Evaluate[allBlockVars],
-    If[compSymVars =!= {}, MapThread[Set, {compSymVars, compNumVals}]];
-    If[$fixedSymVars =!= {}, MapThread[Set, {$fixedSymVars, $fixedNumVals}]];
+(* ---- Numerical MCMC check (skipped if DoNumerical=False) ---- *)
+If[doNumerical,
+  Print["Running numerical MCMC (", nSteps, " steps) ..."];
+  allBlockVars = Union[compSymVars, $fixedSymVars];
+  If[allBlockVars =!= {},
+    SeedRandom[42];
+    compNumVals = If[compSymVars =!= {}, RandomReal[{-1, 1}, Length[compSymVars]], {}];
+    Block[Evaluate[allBlockVars],
+      If[compSymVars =!= {}, MapThread[Set, {compSymVars, compNumVals}]];
+      If[$fixedSymVars =!= {}, MapThread[Set, {$fixedSymVars, $fixedNumVals}]];
+      mcmcCounts = RunNumericalMCMCAT[allStates, $alg, $numBeta, "NSteps" -> nSteps];
+      bw = BoltzmannWeightsAT[allStates, $energy, $numBeta]],
     mcmcCounts = RunNumericalMCMCAT[allStates, $alg, $numBeta, "NSteps" -> nSteps];
-    bw = BoltzmannWeightsAT[allStates, $energy, $numBeta]],
-  mcmcCounts = RunNumericalMCMCAT[allStates, $alg, $numBeta, "NSteps" -> nSteps];
-  bw = BoltzmannWeightsAT[allStates, $energy, $numBeta]];
+    bw = BoltzmannWeightsAT[allStates, $energy, $numBeta]];
+  simFreq = N[# / Total[mcmcCounts]] & /@ mcmcCounts;
+  kl = Total @ Table[
+    With[{p = simFreq[s], q = N @ bw[s]},
+      If[p > 0 && q > 0, p * Log[p / q], 0.]], {s, allStates}];
+  Print["KL divergence: ", NumberForm[kl, {5, 4}]];
+  Print["Numerical: ", If[kl < 0.02, "PASS", "FAIL"]],
+  (* DoNumerical=False: set sentinels so reportArgs is well-formed *)
+  simFreq = None; bw = None; kl = None];
 
-simFreq = N[# / Total[mcmcCounts]] & /@ mcmcCounts;
-kl = Total @ Table[
-  With[{p = simFreq[s], q = N @ bw[s]},
-    If[p > 0 && q > 0, p * Log[p / q], 0.]], {s, allStates}];
-Print["KL divergence: ", NumberForm[kl, {5, 4}]];
-Print["Numerical: ", If[kl < 0.02, "PASS", "FAIL"]];
-
-(* ---- Generate PNG report ---- *)
+(* ---- Generate notebook report ---- *)
 algCode = ReadString[algFile];
 sysName = FileBaseName[algFile] <> "  bits=" <> bitStringArg;
 
 reportArgs = <|
-  "name"       -> sysName,
-  "allStates"  -> allStates,
-  "treeData"   -> treeData,
-  "matrix"     -> matrix,
-  "violations" -> violations,
-  "simFreq"    -> simFreq,
-  "bw"         -> bw,
-  "kl"         -> kl,
-  "algCode"    -> algCode|>;
+  "name"        -> sysName,
+  "allStates"   -> allStates,
+  "treeData"    -> treeData,
+  "matrix"      -> matrix,
+  "violations"  -> violations,
+  "simFreq"     -> simFreq,
+  "bw"          -> bw,
+  "kl"          -> kl,
+  "algCode"     -> algCode,
+  "showTrees"   -> showTrees,
+  "showT"       -> showT,
+  "doNumerical" -> doNumerical|>;
 
 Print["\nGenerating notebook report ..."];
 ExportReportNotebook[reportArgs];
