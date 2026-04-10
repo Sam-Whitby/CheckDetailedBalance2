@@ -29,6 +29,8 @@ One bit is read from the tape. If the bit is 1 (accept), the weight is multiplie
 
 This is equivalent to inverse-CDF sampling: the bit tape encodes the quantile of `U` at sufficient resolution for each comparison that the algorithm makes.
 
+**Deterministic short-circuit (no bit consumed):** Before branching, the checker attempts a lightweight `PiecewiseExpand` on the threshold `p`. If the result is ≤ `lo` the comparison is certainly False; if ≥ `hi` it is certainly True. For a fresh variable with interval `{0, 1}` this means thresholds that evaluate to exactly 0 or exactly 1 are resolved without reading any bit and without creating a BFS branch. This handles common physical cases automatically — for example, a zero link-formation probability when the move does not change a bond energy (`wFwd = 0`), or a mandatory link when two particles would collide (`wFwd = 1` from hard-sphere exclusion) — even if the algorithm writes these using `Max`, `Piecewise`, or any other form, without requiring the algorithm author to add special-case guards.
+
 **Why this matters**: In the previous (Approach 2) formulation, each `RandomReal[]` call was modelled as a single independent Bernoulli trial with probability `p` — correct only when the token is compared exactly once. Interval tracking is correct for any number of comparisons on the same variable and enables the next feature.
 
 ### 3. `RandomChoice[weights -> elements]`
@@ -60,7 +62,15 @@ For each pair of distinct states `(i, j)`, the checker verifies:
 T(i→j) · exp(−β E(i)) − T(j→i) · exp(−β E(j)) = 0
 ```
 
-using `FullSimplify[PiecewiseExpand[...], Assumptions → {β > 0}]`. The Metropolis `Piecewise` expression is expanded and the inverse temperature `β` is kept as a free symbol, so that the Boltzmann factors cancel algebraically when detailed balance holds.
+A **tiered simplification** strategy is used, escalating only when cheaper methods fail:
+
+| Tier | Method | Catches |
+|------|--------|---------|
+| 1 | Literal `=== 0` test | Both T entries are zero (disconnected state pairs) |
+| 2 | `Simplify[..., β > 0]` | Algebraic cancellation without expanding Piecewise cases |
+| 3 | `FullSimplify[PiecewiseExpand[...], β > 0]` | Piecewise Metropolis terms requiring sign-case analysis |
+
+All three tiers are exact — no numerical approximations are made. The Boltzmann factor `β` is kept as a free symbol throughout. Only state pairs that survive Tier 1 and Tier 2 reach the expensive `FullSimplify + PiecewiseExpand` call, which significantly reduces runtime for systems with many disconnected or simply-balanced state pairs.
 
 ### 6. Numerical MCMC validation
 

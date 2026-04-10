@@ -307,23 +307,41 @@ RunWithBitsAT[alg_, state_, bits_List] := Module[
      Computes the conditional probability that U_j < p given that
      U_j lies in the current interval [lo, hi].
      Returns True (accept, U < p) or False (reject, U >= p).
-     Updates the interval and path weight. *)
-  acceptTestI[j_, p_] := Module[{lo, hi, condP, pR},
+     Updates the interval and path weight.
+
+     Deterministic short-circuit (no bit consumed):
+       p <= lo  =>  U >= p with certainty  =>  Return[False]
+       p >= hi  =>  U <  p with certainty  =>  Return[True]
+
+     For a fresh variable lo=0, hi=1 these fire whenever the threshold
+     p is exactly 0 (reject certainly) or exactly 1 (accept certainly).
+     This covers e.g. wFwd=0 for zero-coupling neighbour pairs, and
+     wFwd=1 for hard-sphere exclusion, without consuming any BFS bit.
+
+     To handle thresholds that are symbolically 0/1 but not yet reduced
+     to a number — e.g. Max[0,...] rather than Piecewise, or a Piecewise
+     whose conditions have not yet been evaluated — we first attempt a
+     lightweight PiecewiseExpand, and then use TrueQ so that an
+     unevaluated symbolic comparison never triggers the short-circuit
+     incorrectly. *)
+  acceptTestI[j_, p_] := Module[{lo, hi, condP, pR, pVal},
     lo = intervals[[j, 1]];
     hi = intervals[[j, 2]];
+    (* Attempt to reduce symbolic threshold without full Simplify overhead *)
+    pVal = If[NumericQ[p], p, PiecewiseExpand[p]];
     (* Deterministic cases: no bit consumed, interval unchanged *)
-    If[p <= lo, Return[False, Module]];  (* U in [lo,hi], p<=lo => U >= p always *)
-    If[p >= hi, Return[True,  Module]];  (* U in [lo,hi], p>=hi => U < p  always *)
-    condP = (p - lo) / (hi - lo);
+    If[TrueQ[pVal <= lo], Return[False, Module]];
+    If[TrueQ[pVal >= hi], Return[True,  Module]];
+    condP = (pVal - lo) / (hi - lo);
     pos++;
     If[pos > Length[bits], Throw[$OutOfBits, $dbc$tag]];
     pR = condP /. {r_Real :> Rationalize[r]};
     If[bits[[pos]] == 1,
       weight *= pR;
-      intervals[[j]] = {lo, p};
+      intervals[[j]] = {lo, pVal};
       True,
       weight *= (1 - pR);
-      intervals[[j]] = {p, hi};
+      intervals[[j]] = {pVal, hi};
       False
     ]
   ];
@@ -916,7 +934,7 @@ CheckEnergySafety[energy_] := True  (* anonymous functions pass through *)
    ---------------------------------------------------------------- *)
 CheckDetailedBalance[matrix_Association, allStates_List, symEnergy_,
                      extraAssumptions_List : {}] := Module[
-  {n = Length[allStates], violations = {}, si, sj, tij, tji, ei, ej, res},
+  {n = Length[allStates], violations = {}, si, sj, tij, tji, ei, ej, expr, res},
   Do[
     si = allStates[[i]]; sj = allStates[[j]];
     tij = Lookup[matrix, Key[{si, sj}], 0];
@@ -924,12 +942,35 @@ CheckDetailedBalance[matrix_Association, allStates_List, symEnergy_,
     (* Rationalise any float energy values for backward compatibility *)
     ei  = symEnergy[si] /. {r_Real :> Rationalize[r]};
     ej  = symEnergy[sj] /. {r_Real :> Rationalize[r]};
-    res = FullSimplify[
-      PiecewiseExpand[
-        tij * Exp[-\[Beta] * ei] -
-        tji * Exp[-\[Beta] * ej]
-      ],
-      Assumptions -> Join[{\[Beta] > 0}, extraAssumptions]
+    expr = tij * Exp[-\[Beta] * ei] - tji * Exp[-\[Beta] * ej];
+    (* Tiered simplification: try cheap tests first, escalate only when needed.
+       Each tier is exact — no numerical approximations are made.
+
+       Tier 1: Both transition probabilities are zero (most state pairs in a
+               sparse system are disconnected).  The expression is 0 - 0 = 0
+               immediately; no simplification needed.
+
+       Tier 2: Simplify (no PiecewiseExpand).  Fast algebraic simplification.
+               Catches cases where the Boltzmann factors cancel trivially, or
+               where the expression is already a polynomial in Exp[-β·...] that
+               reduces to zero without needing to expand Piecewise cases.
+
+       Tier 3: FullSimplify[PiecewiseExpand[...]].  Full power, needed when
+               the residual contains Piecewise Metropolis terms whose sign cases
+               must be resolved symbolically under the assumption β > 0. *)
+    res = Which[
+      (* Tier 1: trivially zero *)
+      TrueQ[expr === 0],
+        0,
+      (* Tier 2: Simplify without PiecewiseExpand *)
+      TrueQ[Simplify[expr,
+              Assumptions -> Join[{\[Beta] > 0}, extraAssumptions]] === 0],
+        0,
+      (* Tier 3: full treatment *)
+      True,
+        FullSimplify[
+          PiecewiseExpand[expr],
+          Assumptions -> Join[{\[Beta] > 0}, extraAssumptions]]
     ];
     If[res =!= 0,
       AppendTo[violations, <|"pair" -> {si, sj}, "residual" -> res|>]
