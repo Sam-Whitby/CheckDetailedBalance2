@@ -934,7 +934,7 @@ CheckEnergySafety[energy_] := True  (* anonymous functions pass through *)
    ---------------------------------------------------------------- *)
 CheckDetailedBalance[matrix_Association, allStates_List, symEnergy_,
                      extraAssumptions_List : {}] := Module[
-  {n = Length[allStates], violations = {}, si, sj, tij, tji, ei, ej, expr, res},
+  {n = Length[allStates], violations = {}, si, sj, tij, tji, ei, ej, res},
   Do[
     si = allStates[[i]]; sj = allStates[[j]];
     tij = Lookup[matrix, Key[{si, sj}], 0];
@@ -942,35 +942,12 @@ CheckDetailedBalance[matrix_Association, allStates_List, symEnergy_,
     (* Rationalise any float energy values for backward compatibility *)
     ei  = symEnergy[si] /. {r_Real :> Rationalize[r]};
     ej  = symEnergy[sj] /. {r_Real :> Rationalize[r]};
-    expr = tij * Exp[-\[Beta] * ei] - tji * Exp[-\[Beta] * ej];
-    (* Tiered simplification: try cheap tests first, escalate only when needed.
-       Each tier is exact — no numerical approximations are made.
-
-       Tier 1: Both transition probabilities are zero (most state pairs in a
-               sparse system are disconnected).  The expression is 0 - 0 = 0
-               immediately; no simplification needed.
-
-       Tier 2: Simplify (no PiecewiseExpand).  Fast algebraic simplification.
-               Catches cases where the Boltzmann factors cancel trivially, or
-               where the expression is already a polynomial in Exp[-β·...] that
-               reduces to zero without needing to expand Piecewise cases.
-
-       Tier 3: FullSimplify[PiecewiseExpand[...]].  Full power, needed when
-               the residual contains Piecewise Metropolis terms whose sign cases
-               must be resolved symbolically under the assumption β > 0. *)
-    res = Which[
-      (* Tier 1: trivially zero *)
-      TrueQ[expr === 0],
-        0,
-      (* Tier 2: Simplify without PiecewiseExpand *)
-      TrueQ[Simplify[expr,
-              Assumptions -> Join[{\[Beta] > 0}, extraAssumptions]] === 0],
-        0,
-      (* Tier 3: full treatment *)
-      True,
-        FullSimplify[
-          PiecewiseExpand[expr],
-          Assumptions -> Join[{\[Beta] > 0}, extraAssumptions]]
+    res = FullSimplify[
+      PiecewiseExpand[
+        tij * Exp[-\[Beta] * ei] -
+        tji * Exp[-\[Beta] * ej]
+      ],
+      Assumptions -> Join[{\[Beta] > 0}, extraAssumptions]
     ];
     If[res =!= 0,
       AppendTo[violations, <|"pair" -> {si, sj}, "residual" -> res|>]

@@ -62,15 +62,7 @@ For each pair of distinct states `(i, j)`, the checker verifies:
 T(i→j) · exp(−β E(i)) − T(j→i) · exp(−β E(j)) = 0
 ```
 
-A **tiered simplification** strategy is used, escalating only when cheaper methods fail:
-
-| Tier | Method | Catches |
-|------|--------|---------|
-| 1 | Literal `=== 0` test | Both T entries are zero (disconnected state pairs) |
-| 2 | `Simplify[..., β > 0]` | Algebraic cancellation without expanding Piecewise cases |
-| 3 | `FullSimplify[PiecewiseExpand[...], β > 0]` | Piecewise Metropolis terms requiring sign-case analysis |
-
-All three tiers are exact — no numerical approximations are made. The Boltzmann factor `β` is kept as a free symbol throughout. Only state pairs that survive Tier 1 and Tier 2 reach the expensive `FullSimplify + PiecewiseExpand` call, which significantly reduces runtime for systems with many disconnected or simply-balanced state pairs.
+using `FullSimplify[PiecewiseExpand[...], Assumptions → {β > 0}]`. The Metropolis `Piecewise` expression is expanded and the inverse temperature `β` is kept as a free symbol, so that the Boltzmann factors cancel algebraically when detailed balance holds.
 
 ### 6. Numerical MCMC validation
 
