@@ -94,7 +94,8 @@ If[!FileExistsQ[algFile], algFile = scriptDir <> algFile];
 If[!FileExistsQ[algFile],
   Print["ERROR: File not found: ", posArgs[[1]]]; Exit[1]];
 
-ClearAll[Algorithm, energy, BitsToState, numBeta, symParams, DynamicSymParams, DisplayState];
+ClearAll[Algorithm, energy, BitsToState, numBeta, symParams, DynamicSymParams, DisplayState,
+         AnimationSetupCouplings];
 Get[algFile];
 
 If[Length[DownValues[Algorithm]] == 0,
@@ -116,23 +117,64 @@ nRows  = If[is2D, gridL, 1];
 nCols  = If[is2D, gridL, nSites];
 
 (* ---- Assign coupling constants ---- *)
-(* Parse J<a><b>=<f> args *)
-jSupplied = Association @ Map[
-  Function[opt, With[{p = StringSplit[opt, "=", 2]},
-    ToExpression[p[[1]]] -> ToExpression[p[[2]]]]],
-  Select[kvArgs, StringMatchQ[#, "J" ~~ DigitCharacter ~~ DigitCharacter ~~ "=" ~~ __] ||
-                 StringMatchQ[#, "J" ~~ DigitCharacter ~~ "=" ~~ __] &]];
+(* 1. Parse ALL J-prefixed key=val args into a string-keyed Association.
+      Accepts both simple J12=-1.0 and extended Jd112=-1.0, Jdsq212=-0.5, etc. *)
+jAllSupplied = Association @ Map[
+  Function[opt, With[{p = StringSplit[opt, "=", 2]}, p[[1]] -> ToExpression[p[[2]]]]],
+  Select[kvArgs, StringMatchQ[#,
+    "J" ~~ (LetterCharacter | DigitCharacter).. ~~ "=" ~~ __] &]];
+
+(* 2. Build symbol-keyed jSupplied for backward-compat Lookup (keys are Mathematica symbols) *)
+jSupplied = Association @ KeyValueMap[Rule[ToExpression[#1], #2] &, jAllSupplied];
 
 types = Sort[DeleteCases[initialState, 0]];
-(* Random J values drawn from N(0,1) so bonds can be attractive or repulsive *)
+
+(* 3. Pre-collect DynamicSymParams symbol names as strings BEFORE any assignments.
+      At this point all symbols are unbound, so ToString gives their names correctly.
+      Must happen before steps 4-6 which set symbol values. *)
+$dynSymNames = {};
+If[Length[DownValues[DynamicSymParams]] > 0,
+  With[{dynP = DynamicSymParams[{initialState}]},
+    $dynSymNames = Map[ToString,
+      Join[Lookup[dynP, "eps", {}], Lookup[dynP, "couplings", {}]]]]];
+
+(* 4. Set all explicitly supplied J symbols immediately *)
+KeyValueMap[Function[{name, val},
+  With[{key = name}, Set[Evaluate[ToExpression[key]], val]]], jAllSupplied];
+
+(* 5. Auto-assign any missing J<a><b> with random values (backward compat for simple files).
+      Work with string keys throughout; only call ToExpression[key] for Set. *)
 SeedRandom[42];
-jAssigned = <||>;
+jAssigned = jAllSupplied;   (* start from explicitly supplied; will add auto-assigned ones *)
 Do[If[a < b,
-  sym = ToExpression["J" <> ToString[a] <> ToString[b]];
-  val = Lookup[jSupplied, sym, RandomVariate[NormalDistribution[0, 1]]];
-  Set[Evaluate[sym], val];
-  AssociateTo[jAssigned, ToString[sym] -> val]],
+  With[{key = "J" <> ToString[a] <> ToString[b]},
+    If[!KeyExistsQ[jAllSupplied, key],
+      With[{val = RandomVariate[NormalDistribution[0, 1]]},
+        Set[Evaluate[ToExpression[key]], val];
+        AssociateTo[jAssigned, key -> val]]]]],
   {a, types}, {b, types}];
+
+(* 6. Algorithm-specific coupling hook: fills in any missing extended-family symbols.
+      Define AnimationSetupCouplings[jArgs, types] in the .wl file to handle e.g.
+      Jd1<a><b>, Jdsq2<a><b>, Jd2<a><b>, Jdsq5<a><b>. *)
+If[Length[DownValues[AnimationSetupCouplings]] > 0,
+  AnimationSetupCouplings[jAllSupplied, types]];
+
+(* 7. Assign any remaining symbols from DynamicSymParams not yet set.
+      Uses $dynSymNames captured in step 3 (before any assignments), so names are
+      always correct strings regardless of whether symbols now have numeric values.
+      Rebuilds jAssigned so the params table shows all declared symbols. *)
+If[$dynSymNames =!= {},
+  SeedRandom[99];
+  Scan[Function[name,
+    With[{sym = ToExpression[name]},
+      If[!NumericQ[sym],
+        Set[Evaluate[sym], RandomReal[{-1, 1}]]]]],
+    $dynSymNames];
+  jAssigned = Association @ Map[
+    Function[name, name -> N[ToExpression[name]]],
+    $dynSymNames]];
+(* For files without DynamicSymParams, jAssigned has correct entries from step 5. *)
 
 (* ---- Run algorithm and collect data ---- *)
 Print["Running ", nSteps, " steps of ", algFile, " ..."];
@@ -170,7 +212,12 @@ pyScript = FileNameJoin[{scriptDir, "animate_plot.py"}];
 If[!FileExistsQ[pyScript],
   Print["ERROR: animate_plot.py not found at ", pyScript]; Exit[1]];
 
-result = RunProcess[{"python3", pyScript, dataFile}];
+(* Find a python3 that has matplotlib; prefer python3.11, fall back to python3 *)
+pythonCmd = SelectFirst[{"python3.11", "python3", "python"},
+  Function[cmd, RunProcess[{cmd, "-c", "import matplotlib"}, "ExitCode"] === 0],
+  "python3"];
+
+result = RunProcess[{pythonCmd, pyScript, dataFile}];
 If[result["ExitCode"] != 0,
   Print["Python error:\n", result["StandardError"]];
   Print["Standard output:\n", result["StandardOutput"]]];

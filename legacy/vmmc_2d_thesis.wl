@@ -189,19 +189,47 @@ $tvNbrs[s_, L_] := $tvNbrs[s,L] =
    SECTION 3 — Coupling constants and pair energy
    ================================================================ *)
 
-(* Single coupling symbol per type pair: J<min><max>.
-   Identical naming to vmmc_2d.wl — compatible with animate.wls. *)
-$pairJ[a_, b_] :=
+(* Distance-specific coupling symbol per type pair.
+   d²=1 → Jd1<lo><hi>,  d²=2 → Jdsq2<lo><hi>,
+   d²=4 → Jd2<lo><hi>,  d²=5 → Jdsq5<lo><hi>.
+   Each distance range has an independent coupling, matching the
+   C++ weakD1 / Dsq2 / D2 / Dsq5 interaction parameters.
+   animate.wls assigns these via Jd112=-1.0 Jdsq212=-0.5 etc. *)
+$pairJD2[d2_, a_, b_] :=
   If[a == 0 || b == 0, 0,
-     ToExpression["J" <> ToString[Min[a,b]] <> ToString[Max[a,b]]]]
+    With[{lo = Min[a,b], hi = Max[a,b],
+          prefix = Switch[d2, 1,"Jd1", 2,"Jdsq2", 4,"Jd2", 5,"Jdsq5", _,None]},
+      If[prefix === None, 0,
+         ToExpression[prefix <> ToString[lo] <> ToString[hi]]]]]
 
-(* DynamicSymParams: called once per connected component by the checker. *)
+(* DynamicSymParams: called once per connected component by the checker.
+   Returns all four coupling families for the types present. *)
 DynamicSymParams[states_List] :=
   Module[{types = Sort[DeleteCases[Union @@ states, 0]]},
     <|"couplings" ->
       Flatten @ Table[
-        If[a < b, $pairJ[a, b], Nothing],
+        If[a < b,
+          {$pairJD2[1,a,b], $pairJD2[2,a,b], $pairJD2[4,a,b], $pairJD2[5,a,b]},
+          Nothing],
         {a, types}, {b, types}]|>]
+
+(* AnimationSetupCouplings: hook called by animate.wls after it sets any
+   explicitly supplied J symbols.  Fills in missing distance-family symbols
+   for each type pair, falling back to J<a><b> if supplied, else random. *)
+AnimationSetupCouplings[jArgs_Association, types_List] :=
+  Module[{fams = {"Jd1", "Jdsq2", "Jd2", "Jdsq5"}},
+    Do[If[a < b,
+      With[{baseKey = "J" <> ToString[a] <> ToString[b]},
+        Scan[Function[fam,
+          With[{key = fam <> ToString[a] <> ToString[b]},
+            With[{sym = ToExpression[key]},
+              If[!NumericQ[sym],
+                Set[Evaluate[sym],
+                  Lookup[jArgs, key,
+                    Lookup[jArgs, baseKey,
+                      RandomVariate[NormalDistribution[-1, 0.3]]]]]]]]],
+          fams]]],
+      {a, types}, {b, types}]]
 
 (* Gradient scale at bond midpoint column xmid. *)
 $tvGamma[xmid_, L_] :=
@@ -209,7 +237,7 @@ $tvGamma[xmid_, L_] :=
 
 (* Pair energy: typeV at virtual position {vr,vc} vs typeQ at site q.
    d²=0 → Infinity (hard core).  d²>5 → 0 (beyond range).
-   d²∈{1,2,4,5} → γ(x_mid) × J_{typeV,typeQ}. *)
+   d²∈{1,2,4,5} → γ(x_mid) × $pairJD2[d², typeV, typeQ]. *)
 $tvVPairE[typeV_, {vr_, vc_}, typeQ_, q_, L_] :=
   If[typeV == 0 || typeQ == 0, 0,
     With[{qr = Ceiling[q/L], qc = Mod[q-1,L]+1},
@@ -220,7 +248,7 @@ $tvVPairE[typeV_, {vr_, vc_}, typeQ_, q_, L_] :=
             Which[
               d2 == 0, Infinity,
               d2 > 5,  0,
-              True,    g * $pairJ[typeV, typeQ]]]]]]]
+              True,    g * $pairJD2[d2, typeV, typeQ]]]]]]]
 
 
 (* ================================================================
@@ -228,10 +256,12 @@ $tvVPairE[typeV_, {vr_, vc_}, typeQ_, q_, L_] :=
    ================================================================ *)
 
 (* Unique undirected bonds at 1 ≤ d² ≤ 5 on the L×L column grid.
-   Memoised per L. *)
+   Stored as {s1, s2, d²} triples so energy[] can look up the correct
+   coupling symbol without recomputing distances.  Memoised per L. *)
 $tvUniqueBonds[L_] := $tvUniqueBonds[L] =
   Flatten[
-    Table[If[1 <= $tvD2[s1,s2,L] <= 5, {{s1,s2}}, {}],
+    Table[With[{d2 = $tvD2[s1,s2,L]},
+            If[1 <= d2 <= 5, {{s1, s2, d2}}, {}]],
           {s1, L^2}, {s2, s1+1, L^2}], 2]
 
 energy[state_List] :=
@@ -241,7 +271,7 @@ energy[state_List] :=
         With[{a = state[[bond[[1]]]], b = state[[bond[[2]]]]},
           If[a == 0 || b == 0, 0,
             $tvGamma[($tvCol[bond[[1]],L] + $tvCol[bond[[2]],L])/2, L] *
-            $pairJ[a, b]]]],
+            $pairJD2[bond[[3]], a, b]]]],
       $tvUniqueBonds[L]]]
 
 

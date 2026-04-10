@@ -83,23 +83,21 @@ def main():
         vmax = n_types + 0.5
 
     # ------------------------------------------------------------------ #
-    # Figure layout
+    # Figure layout: grid | energy | params table
     # ------------------------------------------------------------------ #
-    fig, (ax_grid, ax_energy) = plt.subplots(
-        1, 2, figsize=(12, max(4, n_rows + 1)),
-        gridspec_kw={"width_ratios": [1, 1.6]})
+    has_params = bool(params)
+    width_ratios = [1, 1.6, 1.2] if has_params else [1, 1.6]
+    fig, axes = plt.subplots(
+        1, 3 if has_params else 2,
+        figsize=(16 if has_params else 12, max(4, n_rows + 1)),
+        gridspec_kw={"width_ratios": width_ratios})
+    ax_grid, ax_energy = axes[0], axes[1]
+    ax_table = axes[2] if has_params else None
     fig.patch.set_facecolor("#f5f5f5")
 
-    # Title: algorithm file; subtitle: parameter values
-    mode_tag = f"  [simple {fps:.0f} fps]" if simple else f"  [{fps:.1f} fps]"
+    # Title: algorithm file + mode tag
+    mode_tag = f"  [simple  {fps:.0f} fps]" if simple else f"  [{fps:.1f} fps]"
     fig.suptitle(algo_name + mode_tag, fontsize=9, y=0.99, style="italic")
-    if params:
-        param_str = "   ".join(
-            f"β={v:.3f}" if k == "beta" else f"{k}={v:.3f}"
-            for k, v in params.items())
-        fig.text(0.5, 0.955, param_str,
-                 ha="center", va="top", fontsize=8, color="#444444",
-                 fontfamily="monospace")
 
     # ---- Lattice panel ------------------------------------------------ #
     def to_grid(state):
@@ -170,6 +168,37 @@ def main():
 
     xs: list = []
     ys: list = []
+
+    # ---- Parameters table --------------------------------------------- #
+    if ax_table is not None:
+        ax_table.axis("off")
+        # Separate beta from coupling/field params
+        rows = []
+        for k, v in params.items():
+            if k == "beta":
+                label = "β"
+            else:
+                label = k
+            rows.append([label, f"{v:.4f}"])
+        if rows:
+            tbl = ax_table.table(
+                cellText=rows,
+                colLabels=["Parameter", "Value"],
+                cellLoc="center",
+                loc="upper left",
+                bbox=[0, 0, 1, 1])
+            tbl.auto_set_font_size(False)
+            tbl.set_fontsize(8)
+            # Style header row
+            for col in range(2):
+                tbl[(0, col)].set_facecolor("#cccccc")
+                tbl[(0, col)].set_text_props(weight="bold")
+            # Alternate row shading
+            for row in range(1, len(rows) + 1):
+                bg = "#f0f0f0" if row % 2 == 0 else "#ffffff"
+                for col in range(2):
+                    tbl[(row, col)].set_facecolor(bg)
+        ax_table.set_title("Parameters", fontsize=9, pad=4)
 
     # ------------------------------------------------------------------ #
     # Animation update function
