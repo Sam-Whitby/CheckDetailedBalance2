@@ -111,19 +111,17 @@ $torusD2[s1_, s2_, L_] :=
 
 
 (* ================================================================
-   SECTION 4 — Extended-range coupling symbols
+   SECTION 4 — Coupling symbols
    ================================================================ *)
 
-(* One coupling symbol per (distance class, type pair).
-   lo = Min[a,b], hi = Max[a,b] ensures Jd1<lo><hi> is symmetric.
-   Returns 0 whenever either particle is empty (type 0) or when
-   d² is not in {1,2,4,5}. *)
+(* Only d²=1 (nearest-neighbour) coupling is active; all longer-range
+   couplings are exactly 0.  This keeps the symbol count small so the
+   DB checker terminates quickly.  Change d2==1 to the desired set once
+   longer-range coupling is needed. *)
 $pairJD2[d2_, a_, b_] :=
-  If[a == 0 || b == 0, 0,
-    With[{lo = Min[a,b], hi = Max[a,b],
-          prefix = Switch[d2, 1,"Jd1", 2,"Jdsq2", 4,"Jd2", 5,"Jdsq5", _,None]},
-      If[prefix === None, 0,
-         ToExpression[prefix <> ToString[lo] <> ToString[hi]]]]]
+  If[a == 0 || b == 0 || d2 != 1, 0,
+    With[{lo = Min[a,b], hi = Max[a,b]},
+      ToExpression["Jd1" <> ToString[lo] <> ToString[hi]]]]
 
 
 (* ================================================================
@@ -136,19 +134,21 @@ $fieldPhi[s_] := ToExpression["Phi" <> ToString[s]]
 
 
 (* ================================================================
-   SECTION 6 — Extended-range neighbour shells (memoised)
+   SECTION 6 — Neighbour shells (memoised)
    ================================================================ *)
 
-(* All sites q at 1 ≤ d² ≤ 5 from site s on the L×L torus.
-   This is the union of all four distance shells. Memoised per {s,L}
-   to avoid repeated Select calls during cluster growth. *)
+(* Only d²=1 (nearest-neighbour) sites are included, matching the
+   active coupling range in $pairJD2.  Restricting this shell is
+   critical for checker speed: a site q with zero coupling would still
+   trigger a RandomReal[] draw in the cluster builder (consuming a BFS
+   bit) even though the link weight is always 0. *)
 $neighborsD2[s_, L_] := $neighborsD2[s,L] =
   Select[Range[L^2],
-    Function[q, With[{d2 = $torusD2[s, q, L]}, 1 <= d2 <= 5]]]
+    Function[q, $torusD2[s, q, L] == 1]]
 
 
 (* ================================================================
-   SECTION 7 — Unique undirected bonds at 1 ≤ d² ≤ 5 (memoised)
+   SECTION 7 — Unique undirected bonds at d²=1 (memoised)
    ================================================================ *)
 
 (* Each bond is stored as {s1, s2, d²} with s1 < s2 to avoid
@@ -157,7 +157,7 @@ $uniqueBondsExt[L_] := $uniqueBondsExt[L] =
   Flatten[
     Table[
       With[{d2 = $torusD2[s1, s2, L]},
-        If[1 <= d2 <= 5, {{s1, s2, d2}}, {}]],
+        If[d2 == 1, {{s1, s2, d2}}, {}]],
       {s1, L^2}, {s2, s1+1, L^2}],
     2]
 
@@ -373,22 +373,18 @@ ValidStateIDs[maxId_Integer] :=
     ids]
 
 (* DynamicSymParams: declare the free symbolic parameters for each
-   connected component.  Returns both coupling symbols (four per type
-   pair, one per distance class) and field symbols (one per site). *)
+   connected component.  Only d²=1 coupling symbols are declared;
+   longer-range couplings are numerically 0 and need no symbol.
+   Field and coupling symbols both go under "couplings" so that
+   check.wls / report.wls assign numeric values to all of them. *)
 DynamicSymParams[states_List] :=
   Module[{types = Sort[DeleteCases[Union @@ states, 0]],
           L = Round[Sqrt[Length[First[states]]]]},
-    (* Both coupling symbols and field symbols go under "couplings" so that
-       check.wls / report.wls (which only read "eps" and "couplings") assign
-       all of them numeric values during the numerical MCMC run. *)
     <|"couplings" ->
         Join[
           Flatten @ Table[
             If[a < b,
-              {ToExpression["Jd1"   <> ToString[a] <> ToString[b]],
-               ToExpression["Jdsq2" <> ToString[a] <> ToString[b]],
-               ToExpression["Jd2"   <> ToString[a] <> ToString[b]],
-               ToExpression["Jdsq5" <> ToString[a] <> ToString[b]]},
+              {ToExpression["Jd1" <> ToString[a] <> ToString[b]]},
               Nothing],
             {a, types}, {b, types}],
           Table[ToExpression["Phi" <> ToString[s]], {s, L^2}]]|>]
