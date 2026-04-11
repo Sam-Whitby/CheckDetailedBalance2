@@ -20,6 +20,13 @@
 scriptDir = DirectoryName[$InputFileName];
 Get[scriptDir <> "dbc_core.wl"];
 
+(* Launch parallel kernels for FullSimplify parallelisation *)
+$nKernels = 0;
+Quiet[Check[LaunchKernels[]; $nKernels = Length[Kernels[]], $nKernels = 0]];
+If[$nKernels > 0,
+  Print["Parallel: ", $nKernels, " kernels launched."],
+  Print["Note: parallel kernel launch failed — running single-threaded."]];
+
 (* ---- Parse command-line arguments ---- *)
 args = $ScriptCommandLine;
 If[Length[args] >= 1 && StringMatchQ[args[[1]], ___ ~~ "report.wls"],

@@ -934,26 +934,39 @@ CheckEnergySafety[energy_] := True  (* anonymous functions pass through *)
    ---------------------------------------------------------------- *)
 CheckDetailedBalance[matrix_Association, allStates_List, symEnergy_,
                      extraAssumptions_List : {}] := Module[
-  {n = Length[allStates], violations = {}, si, sj, tij, tji, ei, ej, res},
+  {n = Length[allStates], pairs, exprs, results, violations},
+
+  pairs = Flatten[Table[{i, j}, {i, 1, n}, {j, i + 1, n}], 1];
+  If[Length[pairs] == 0, Return[{}]];
+
+  (* Build all expressions on the MAIN kernel — symEnergy is only called here.
+     The results are pure symbolic data (no custom function calls) safe to send
+     to remote kernels for FullSimplify. *)
+  exprs = Map[
+    Function[ij,
+      With[{si = allStates[[ij[[1]]]], sj = allStates[[ij[[2]]]]},
+        With[{tij = Lookup[matrix, Key[{si, sj}], 0],
+              tji = Lookup[matrix, Key[{sj, si}], 0],
+              ei  = symEnergy[si] /. {r_Real :> Rationalize[r]},
+              ej  = symEnergy[sj] /. {r_Real :> Rationalize[r]}},
+          tij * Exp[-\[Beta] * ei] - tji * Exp[-\[Beta] * ej]]]],
+    pairs];
+
+  (* Use ParallelMap when kernels are available; fall back to sequential Map.
+     The With[] ensures 'assm' is embedded by value before the function is
+     sent to remote kernels (standard Mathematica parallel pattern). *)
+  With[{assm = Join[{\[Beta] > 0}, extraAssumptions]},
+    results = If[Length[Kernels[]] > 0,
+      ParallelMap[FullSimplify[PiecewiseExpand[#], Assumptions -> assm] &, exprs],
+      Map[    FullSimplify[PiecewiseExpand[#], Assumptions -> assm] &, exprs]]];
+
+  violations = {};
   Do[
-    si = allStates[[i]]; sj = allStates[[j]];
-    tij = Lookup[matrix, Key[{si, sj}], 0];
-    tji = Lookup[matrix, Key[{sj, si}], 0];
-    (* Rationalise any float energy values for backward compatibility *)
-    ei  = symEnergy[si] /. {r_Real :> Rationalize[r]};
-    ej  = symEnergy[sj] /. {r_Real :> Rationalize[r]};
-    res = FullSimplify[
-      PiecewiseExpand[
-        tij * Exp[-\[Beta] * ei] -
-        tji * Exp[-\[Beta] * ej]
-      ],
-      Assumptions -> Join[{\[Beta] > 0}, extraAssumptions]
-    ];
-    If[res =!= 0,
-      AppendTo[violations, <|"pair" -> {si, sj}, "residual" -> res|>]
-    ],
-    {i, 1, n}, {j, i + 1, n}
-  ];
+    If[results[[k]] =!= 0,
+      AppendTo[violations,
+        <|"pair"     -> {allStates[[pairs[[k, 1]]]], allStates[[pairs[[k, 2]]]]},
+          "residual" -> results[[k]]|>]],
+    {k, Length[pairs]}];
   violations
 ]
 

@@ -35,6 +35,13 @@
 scriptDir = DirectoryName[$InputFileName];
 Get[scriptDir <> "dbc_core.wl"];
 
+(* ---- Launch parallel kernels for FullSimplify parallelisation ---- *)
+$nKernels = 0;
+Quiet[Check[LaunchKernels[]; $nKernels = Length[Kernels[]], $nKernels = 0]];
+If[$nKernels > 0,
+  Print["Parallel: ", $nKernels, " kernels launched."],
+  Print["Note: parallel kernel launch failed — running single-threaded."]];
+
 (* ---- Parse command-line arguments ---- *)
 args = $ScriptCommandLine;
 If[Length[args] >= 1 && StringMatchQ[args[[1]], ___ ~~ "check.wls"],
@@ -169,17 +176,56 @@ Print[StringPadRight["Bits",    colBits],
 Print[StringRepeat["-", totalCols]];
 
 (* ================================================================
+   Progress bar helpers
+   ================================================================ *)
+$nBitStrings = Length[allBitStrings];
+$checkStart  = AbsoluteTime[];
+$barWidth    = 28;
+
+formatDuration[secs_] :=
+  Which[secs < 60,   ToString[Round[secs]] <> "s",
+        secs < 3600, ToString[Floor[secs/60]] <> "m " <>
+                     ToString[Round[Mod[secs, 60]]] <> "s",
+        True,        ToString[Floor[secs/3600]] <> "h " <>
+                     ToString[Floor[Mod[secs/60, 60]]] <> "m"];
+
+writeProgress[idx_] := Module[{elapsed, pct, filled, arrow, bar, eta, etaStr, elStr},
+  elapsed = AbsoluteTime[] - $checkStart;
+  pct     = If[$nBitStrings > 0, idx / $nBitStrings, 0.];
+  filled  = Round[pct * $barWidth];
+  arrow   = If[filled < $barWidth, ">", ""];
+  bar     = "[" <> StringRepeat["=", filled] <> arrow <>
+            StringRepeat[" ", Max[0, $barWidth - filled - StringLength[arrow]]] <> "]";
+  eta     = If[idx > 0 && elapsed > 0,
+               elapsed * ($nBitStrings - idx) / idx,
+               Infinity];
+  etaStr  = If[!NumberQ[eta] || eta === Infinity, "?", formatDuration[eta]];
+  elStr   = formatDuration[elapsed];
+  WriteString[$Output,
+    "\r" <> bar <> " " <> ToString[idx] <> "/" <> ToString[$nBitStrings] <>
+    "  " <> ToString[Round[pct * 100]] <> "%  elapsed: " <> elStr <>
+    "  ETA: " <> etaStr <> "   "]  (* trailing spaces clear previous longer text *)
+];
+
+(* Before printing a permanent row: clear the progress line first *)
+clearProgress[] := WriteString[$Output, "\r" <> StringRepeat[" ", 78] <> "\r"];
+
+(* ================================================================
    Main loop
    ================================================================ *)
 coveredAssoc = <||>;   (* Association for O(1) covered-state lookup *)
 testedCount  = 0;
 symPassCount  = 0; symFailCount  = 0;
 numPassCount  = 0; numFailCount  = 0;
+$loopIdx     = 0;
 
 Do[
+  $loopIdx++;
   state = Check[BitsToState[bitString], $Failed];
-  If[state === $Failed || state === None, Continue[]];
-  If[KeyExistsQ[coveredAssoc, state], Continue[]];
+  If[state === $Failed || state === None,
+    writeProgress[$loopIdx]; Continue[]];
+  If[KeyExistsQ[coveredAssoc, state],
+    writeProgress[$loopIdx]; Continue[]];
 
   bitsStr  = StringJoin[ToString /@ bitString];
   stateStr = If[Length[DownValues[DisplayState]] > 0,
@@ -192,8 +238,10 @@ Do[
                "Verbose"     -> verbose];
 
   If[MatchQ[treeData, $dbc$cantHandle[_]],
+    clearProgress[];
     Print[StringPadRight[bitsStr,  colBits], StringPadRight[stateStr, colState],
           StringPadRight["?", colN], "ERROR: ", treeData[[1]]];
+    writeProgress[$loopIdx];
     testedCount++; Continue[]];
 
   allStates = Sort @ Keys[treeData];
@@ -250,16 +298,21 @@ Do[
     numResult = If[kl < 0.02, "PASS", "FAIL"];
     If[numResult === "PASS", numPassCount++, numFailCount++]];
 
-  (* ---- Print result row ---- *)
+  (* ---- Print result row (clear progress bar first) ---- *)
+  clearProgress[];
   Print[StringPadRight[bitsStr,           colBits],
         StringPadRight[stateStr,          colState],
         StringPadRight[ToString[nStates], colN],
         If[mode =!= "Numerical",
            StringPadRight[symResult, colSym] <> StringPadRight[failStr, colFail], ""],
         If[mode =!= "Symbolic",
-           StringPadRight[klStr, colKL] <> StringPadRight[numResult, colNum], ""]],
+           StringPadRight[klStr, colKL] <> StringPadRight[numResult, colNum], ""]];
+  writeProgress[$loopIdx],
 
   {bitString, allBitStrings}];
+
+(* Final newline to clear progress bar before the summary *)
+WriteString[$Output, "\n"];
 
 (* ================================================================
    Summary
