@@ -113,6 +113,21 @@ $energy      = energy;
 $numBeta     = numBeta;
 $hasDynParams = Length[DownValues[DynamicSymParams]] > 0;
 
+(* ---- Verify couplingJ symmetry (if defined) ---- *)
+(* Check type pairs {1..5} at d²∈{1,2,4,5,8,9,10} — covers all
+   physically relevant cases.  Uses Simplify only: negligible overhead.
+   An asymmetric coupling immediately implies a DB violation. *)
+If[Length[DownValues[couplingJ]] > 0,
+  $coupSymViolations = CheckCouplingSymmetry[{1,2,3,4,5}, {1,2,4,5,8,9,10}];
+  If[$coupSymViolations =!= {},
+    Print["ERROR: couplingJ is NOT symmetric — detailed balance cannot hold."];
+    Print["  First violation: a=", $coupSymViolations[[1]]["a"],
+          "  b=", $coupSymViolations[[1]]["b"],
+          "  d2=", $coupSymViolations[[1]]["d2"],
+          "  J[a,b]-J[b,a] = ", $coupSymViolations[[1]]["asymmetry"]];
+    Exit[1]];
+  Print["couplingJ symmetry: PASS"]];
+
 (* Static symbolic parameters (may be None if only DynamicSymParams is used) *)
 $staticSysParams = If[ValueQ[symParams], symParams, None];
 If[AssociationQ[$staticSysParams],

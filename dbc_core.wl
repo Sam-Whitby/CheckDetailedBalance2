@@ -926,6 +926,30 @@ CheckEnergySafety[energy_] := True  (* anonymous functions pass through *)
    ================================================================ *)
 
 (* ----------------------------------------------------------------
+   CheckCouplingSymmetry
+   Verifies that couplingJ[a,b,d2] = couplingJ[b,a,d2] for all pairs
+   in typesToCheck at all squared distances in d2Values.
+   Uses Simplify (not FullSimplify) — negligible overhead.
+   Returns a list of violation records; empty list means symmetric.
+   Call this after loading the algorithm file whenever couplingJ is
+   defined.  An asymmetric coupling immediately implies a detailed-
+   balance violation regardless of the algorithm structure.
+   ---------------------------------------------------------------- *)
+CheckCouplingSymmetry[typesToCheck_List, d2Values_List] :=
+  Module[{violations = {}, diff},
+    Do[
+      If[a < b,
+        Do[
+          diff = Simplify[couplingJ[a, b, d2] - couplingJ[b, a, d2]];
+          If[diff =!= 0,
+            AppendTo[violations,
+              <|"a" -> a, "b" -> b, "d2" -> d2, "asymmetry" -> diff|>]],
+          {d2, d2Values}]],
+      {a, typesToCheck}, {b, typesToCheck}];
+    violations]
+
+
+(* ----------------------------------------------------------------
    CheckDetailedBalance
    Verifies T(i->j)*pi(i) = T(j->i)*pi(j) for all i<j pairs,
    where pi(s) = Exp[-beta * symEnergy[s]].

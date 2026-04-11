@@ -109,6 +109,18 @@ $alg     = Algorithm;
 $energy  = energy;
 $numBeta = numBeta;
 
+(* ---- Verify couplingJ symmetry (if defined) ---- *)
+If[Length[DownValues[couplingJ]] > 0,
+  $coupSymViolations = CheckCouplingSymmetry[{1,2,3,4,5}, {1,2,4,5,8,9,10}];
+  If[$coupSymViolations =!= {},
+    Print["ERROR: couplingJ is NOT symmetric — detailed balance cannot hold."];
+    Print["  First violation: a=", $coupSymViolations[[1]]["a"],
+          "  b=", $coupSymViolations[[1]]["b"],
+          "  d2=", $coupSymViolations[[1]]["d2"],
+          "  J[a,b]-J[b,a] = ", $coupSymViolations[[1]]["asymmetry"]];
+    Exit[1]];
+  Print["couplingJ symmetry: PASS"]];
+
 (* ---- Map bit string to seed state ---- *)
 state = Check[BitsToState[bitString], $Failed];
 If[state === $Failed || state === None,

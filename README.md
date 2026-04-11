@@ -67,10 +67,9 @@ wolframscript -file animate.wls <algorithm.wl> Sites=<n> N=<n> [options]
 | `FPS=f` | `10` | Animation frame rate |
 | `Simple=1` | off | Fast 2-colour mode (holes vs particles) |
 | `RecordEvery=N` | `1` | Record state every N steps |
-| `J<a><b>=f` | random | Set coupling constant J_ab (e.g. `J12=-1.0`) |
-| `Jd1<a><b>=f` | random | Extended coupling at d=1 (vmmc_2d_field) |
+| `Jpair<a><b>=f` | random | Per-pair coupling amplitude for `vmmc_2d_field` (e.g. `Jpair12=-1.0`) |
 
-For `vmmc_2d_field.wl` all unspecified coupling and field symbols (Jd1ab, Phi1, …) are assigned random values automatically. Pass `Beta=1` for a physically meaningful temperature; all other parameters default to random if unspecified.
+For `vmmc_2d_field.wl` all unspecified parameters (`fieldAmp`, `lambdaJ`, `Jpair12`, …) are assigned random values automatically. Pass `Beta=1` for a physically meaningful temperature.
 
 ---
 
@@ -91,13 +90,34 @@ If[RandomReal[] < MetropolisProb[dE], newState, state]
 ```
 where `dE = energy[newState] - energy[state]` and `MetropolisProb[dE]` is intercepted symbolically.
 
-Optional:
+### Defining field and coupling functions (`vmmc_2d_field.wl` style)
+
+For models with a field and distance-dependent coupling, define two functions in your `.wl` file:
+
+```mathematica
+(* Field energy at 0-indexed lattice position (x, y) on an L×L grid *)
+fieldF[x_Integer, y_Integer, L_Integer] := fieldAmp * Sin[Pi * (x+1) / L]
+
+(* Pair coupling between types a,b at squared distance d2.
+   MUST be symmetric: couplingJ[a,b,d2] = couplingJ[b,a,d2].
+   Use $jPairSym[a,b] for a per-type-pair symbol (symmetric by construction). *)
+couplingJ[a_Integer, b_Integer, d2_Integer] := $jPairSym[a,b] * Exp[-lambdaJ * d2]
+
+(* Declare free symbolic parameters (per-pair $jPairSym symbols auto-discovered) *)
+$fieldFreeParams    = {fieldAmp};
+$couplingFreeParams = {lambdaJ};
+$maxD2 = 1;   (* maximum squared distance for bonds; 1 = nearest-neighbour *)
+```
+
+The checker verifies `couplingJ` symmetry before running; an asymmetric coupling immediately implies a DB violation. The `_Integer` patterns ensure pattern matching is always exact (lattice coordinates and distances are always integers).
+
+### Other optional definitions
+
 ```mathematica
 symParams = <|"eps" -> {...}, "couplings" -> {...}|>
 DynamicSymParams[states_List] := ...   (* returns <|"couplings" -> {...}|> *)
 DisplayState[state_] := ...
 ValidStateIDs[maxId_] := ...
-AnimationSetupCouplings[jArgs_, types_] := ...
 ```
 
 See `template.wl` for a fully annotated starting point.
@@ -127,7 +147,7 @@ See `template.wl` for a fully annotated starting point.
 | `kawasaki_1d.wl` | 1D Kawasaki (nearest-neighbour swap) on a periodic ring |
 | `kawasaki_2d.wl` | 2D Kawasaki on a periodic square lattice |
 | `vmmc_2d.wl` | Virtual Move Monte Carlo (Whitelam–Geissler) on a 2D torus |
-| `vmmc_2d_field.wl` | VMMC with extended-range coupling (d=1,√2,2,√5) and a site-dependent field energy (Phi<s>); field change handled by post-cluster Metropolis |
+| `vmmc_2d_field.wl` | VMMC with user-defined field (`fieldF`) and coupling (`couplingJ`) functions. Example: sinusoidal field in x, exponential-decay coupling. Post-cluster Metropolis handles field energy changes. |
 | `jump_1d_edit.wl` | 1D jump dynamics with rejection-sampled displacement |
 | `jump_1d_weighted.wl` | Same jump dynamics using `RandomChoice[weights → ...]` |
 
@@ -154,5 +174,5 @@ wolframscript -file report.wls examples3/vmmc_2d.wl BitString=1001 \
 
 # Animate vmmc_2d_field on a 2×2 grid
 wolframscript -file animate.wls examples3/vmmc_2d_field.wl \
-  Sites=4 N=2 Steps=500 Beta=1 FPS=15 Jd112=-1.0
+  Sites=4 N=2 Steps=500 Beta=1 FPS=15 Jpair12=-1.0
 ```

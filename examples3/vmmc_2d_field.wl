@@ -1,46 +1,96 @@
 (* ================================================================
    vmmc_2d_field.wl
-   2D VMMC with extended-range coupling and a position-dependent
-   field energy on a fully-periodic (torus) square lattice.
+   2D VMMC with user-defined field and coupling functions on a
+   fully-periodic (torus) square lattice.
    ================================================================
 
-   Extends vmmc_2d.wl with two additions:
+   The field f(x,y) and coupling J(a,b,d²) are defined as ordinary
+   Mathematica functions in Section 0 below.  The checker proves
+   detailed balance symbolically for ALL values of any free parameters
+   in these functions simultaneously.
 
-   1. EXTENDED-RANGE COUPLING
-      Pair interactions at d²=1 (d=1), d²=2 (d=√2), d²=4 (d=2)
-      and d²=5 (d=√5) on the L×L torus.  Distances obey the
-      minimum-image convention in both row and column.
-      Each type pair (a,b) with a<b has four independent coupling
-      symbols:
-        Jd1<a><b>    – coupling at d²=1
-        Jdsq2<a><b>  – coupling at d²=2
-        Jd2<a><b>    – coupling at d²=4
-        Jdsq5<a><b>  – coupling at d²=5
-      These are kept symbolic for DB checking and can be assigned
-      real values for numerical simulation / animation.
+   This example defines:
+     fieldF     – sinusoidal field in the x-direction
+     couplingJ  – exponential decay with a per-type-pair amplitude
 
-   2. POSITION-DEPENDENT FIELD ENERGY
-      Each lattice site s ∈ {1,...,L²} carries a field symbol Phi<s>.
-      Any particle (regardless of type) occupying site s contributes
-      Phi<s> to the total energy.  The field is the same for all
-      particle types — it represents a site-dependent external potential.
-      The change in field energy over a cluster move is handled by a
-      post-cluster Metropolis acceptance step:
-        accept with min(1, exp(−β ΔE_field))
-      where ΔE_field = Σ_{p in cluster} [Phi(dest(p)) − Phi(p)].
-      The VMMC link-weight mechanism (unchanged from vmmc_2d.wl) handles
-      all pair-energy changes and enforces superdetailed balance for
-      those; the Metropolis filter is the correct correction for the
-      single-particle field term.
+   To use a different model, edit Section 0 only.
 
    STATE / ENCODING
-      Identical to vmmc_2d.wl: flat L²-array, State[[s]]=0 (empty) or
+      Identical to vmmc_2d.wl: flat L²-array, state[[s]]=0 (empty) or
       k∈{1,...,N} (labeled particle).  BitsToState filters to perfect-
       square lengths.
 
    REFERENCES
       S. Whitelam & P. L. Geissler, J. Chem. Phys. 127, 154101 (2007)
    ================================================================ *)
+
+
+(* ================================================================
+   SECTION 0 — USER INTERFACE: field and coupling functions
+   ================================================================
+
+   Edit this section to define your physical model.
+
+   fieldF[x, y, L]
+     Field energy felt by any particle at lattice column x, row y
+     (both 0-indexed integers, x,y ∈ {0,...,L-1}) on an L×L lattice.
+     Evaluated with integer arguments; use _Integer patterns.
+
+   couplingJ[a, b, d2]
+     Pair interaction between particle types a and b at squared
+     distance d2 (always a positive integer on an integer lattice).
+     MUST satisfy couplingJ[a,b,d2] = couplingJ[b,a,d2].
+     The checker verifies this before running; an asymmetric coupling
+     immediately implies a detailed-balance violation.
+     Use $jPairSym[a,b] for a per-type-pair coupling symbol
+     (it is symmetric by construction: $jPairSym[a,b] = $jPairSym[b,a]).
+
+   $fieldFreeParams
+     List every free symbolic parameter that appears in fieldF
+     (do not include x, y, L — those are always concrete integers).
+
+   $couplingFreeParams
+     List every free symbolic parameter that appears in couplingJ
+     beyond the per-pair $jPairSym symbols (which are auto-discovered).
+
+   $maxD2
+     Maximum squared distance included in bonds and neighbour shells.
+     1 = nearest-neighbour only (fastest checker, d = 1).
+     5 = includes d = 1, √2, 2, √5 (more realistic, slower).
+     The coupling function is evaluated at all active bond distances,
+     so setting $maxD2 = 1 while couplingJ is nonzero at larger d2 is
+     valid — it simply restricts the model to nearest-neighbour bonds.
+   ================================================================ *)
+
+(* Per-pair coupling strength symbol: Jpair<lo><hi>, symmetric by construction *)
+$jPairSym[a_Integer, b_Integer] :=
+  ToExpression["Jpair" <> ToString[Min[a, b]] <> ToString[Max[a, b]]]
+
+(* ---- EXAMPLE FIELD: sinusoidal in the x (column) direction ---- *)
+(* fieldAmp is the field amplitude — a single free symbolic parameter.
+   For an L×L lattice with x ∈ {0,...,L-1}:
+     x=0 → fieldAmp·Sin[π/L]
+     x=1 → fieldAmp·Sin[2π/L]
+     ...
+   Mathematica evaluates Sin at rational multiples of π exactly. *)
+fieldF[x_Integer, y_Integer, L_Integer] :=
+  fieldAmp * Sin[\[Pi] * (x + 1) / L]
+
+(* ---- EXAMPLE COUPLING: exponential decay with per-pair amplitude ---- *)
+(* lambdaJ is the decay rate (one shared free parameter).
+   $jPairSym[a,b] is an independent amplitude symbol per type pair.
+   couplingJ[a,b,d2] = Jpair<lo><hi> · exp(−λ d²)
+   This is symmetric: couplingJ[a,b,d2] = couplingJ[b,a,d2]. ✓ *)
+couplingJ[a_Integer, b_Integer, d2_Integer] :=
+  $jPairSym[a, b] * Exp[-lambdaJ * d2]
+
+(* Free parameters for the checker
+   (per-pair $jPairSym symbols are auto-added by DynamicSymParams) *)
+$fieldFreeParams    = {fieldAmp};
+$couplingFreeParams = {lambdaJ};
+
+(* Nearest-neighbour only by default for checker speed *)
+$maxD2 = 1;
 
 
 (* ================================================================
@@ -94,14 +144,15 @@ $applyDir[s_, {dr_, dc_}, L_] :=
 $row[s_, L_] := Ceiling[s/L]
 $col[s_, L_] := Mod[s-1, L] + 1
 
+(* 0-indexed coordinates for fieldF (x = column index, y = row index) *)
+$siteX[s_, L_] := $col[s, L] - 1   (* x ∈ {0,...,L-1} *)
+$siteY[s_, L_] := $row[s, L] - 1   (* y ∈ {0,...,L-1} *)
+
 
 (* ================================================================
    SECTION 3 — Minimum-image squared distance on the L×L torus
    ================================================================ *)
 
-(* Minimum-image squared distance between sites s1 and s2.
-   Both row and column use the minimum-image convention, so the
-   distance is the same as on an infinite torus. *)
 $torusD2[s1_, s2_, L_] :=
   With[{dr0 = Abs[$row[s1,L] - $row[s2,L]],
          dc0 = Abs[$col[s1,L] - $col[s2,L]]},
@@ -111,100 +162,84 @@ $torusD2[s1_, s2_, L_] :=
 
 
 (* ================================================================
-   SECTION 4 — Coupling symbols
-   ================================================================ *)
+   SECTION 4 — Neighbour shells (memoised)
+   ================================================================
 
-(* Only d²=1 (nearest-neighbour) coupling is active; all longer-range
-   couplings are exactly 0.  This keeps the symbol count small so the
-   DB checker terminates quickly.  Change d2==1 to the desired set once
-   longer-range coupling is needed. *)
-$pairJD2[d2_, a_, b_] :=
-  If[a == 0 || b == 0 || d2 != 1, 0,
-    With[{lo = Min[a,b], hi = Max[a,b]},
-      ToExpression["Jd1" <> ToString[lo] <> ToString[hi]]]]
+   Includes all sites within squared distance $maxD2.
+   Restricting this shell to active bond distances is critical for
+   checker speed: a site with zero coupling would still trigger a
+   RandomReal[] draw in the cluster builder (consuming a BFS bit)
+   even though the link weight is always 0. *)
 
-
-(* ================================================================
-   SECTION 5 — Field energy symbol for site s
-   ================================================================ *)
-
-(* Phi<s> is the field energy at site s, contributed by any particle
-   occupying that site regardless of type. *)
-$fieldPhi[s_] := ToExpression["Phi" <> ToString[s]]
-
-
-(* ================================================================
-   SECTION 6 — Neighbour shells (memoised)
-   ================================================================ *)
-
-(* Only d²=1 (nearest-neighbour) sites are included, matching the
-   active coupling range in $pairJD2.  Restricting this shell is
-   critical for checker speed: a site q with zero coupling would still
-   trigger a RandomReal[] draw in the cluster builder (consuming a BFS
-   bit) even though the link weight is always 0. *)
-$neighborsD2[s_, L_] := $neighborsD2[s,L] =
+$neighborsD2[s_, L_] := $neighborsD2[s, L] =
   Select[Range[L^2],
-    Function[q, $torusD2[s, q, L] == 1]]
+    Function[q, Module[{d2 = $torusD2[s, q, L]}, d2 > 0 && d2 <= $maxD2]]]
 
 
 (* ================================================================
-   SECTION 7 — Unique undirected bonds at d²=1 (memoised)
-   ================================================================ *)
+   SECTION 5 — Unique undirected bonds (memoised)
+   ================================================================
 
-(* Each bond is stored as {s1, s2, d²} with s1 < s2 to avoid
-   double-counting.  Used by energy[] to sum all pair contributions. *)
+   Each bond {s1, s2, d²} with s1 < s2 at squared distance ≤ $maxD2.
+   Used by energy[] to sum all pair contributions. *)
+
 $uniqueBondsExt[L_] := $uniqueBondsExt[L] =
   Flatten[
     Table[
       With[{d2 = $torusD2[s1, s2, L]},
-        If[d2 == 1, {{s1, s2, d2}}, {}]],
+        If[d2 > 0 && d2 <= $maxD2, {{s1, s2, d2}}, {}]],
       {s1, L^2}, {s2, s1+1, L^2}],
     2]
 
 
 (* ================================================================
-   SECTION 8 — Energy function
-   ================================================================ *)
+   SECTION 6 — Energy function
+   ================================================================
 
-(* Total energy = pair energy (extended-range coupling) +
-                  field energy (site-dependent, particle-type-independent).
-   Pair energy: sum over all undirected bonds at d²∈{1,2,4,5}.
-   Field energy: each occupied site s contributes Phi<s>. *)
+   Total energy = pair energy + field energy.
+   Pair energy: sum over all undirected bonds within $maxD2, using
+     couplingJ[type_a, type_b, d²].
+   Field energy: each occupied site s contributes fieldF[x, y, L]
+     where x = $siteX[s,L] and y = $siteY[s,L] are 0-indexed integers. *)
+
 energy[state_List] :=
   With[{L = Round[Sqrt[Length[state]]]},
-    Total[$pairJD2[#[[3]], state[[#[[1]]]], state[[#[[2]]]]] & /@
-          $uniqueBondsExt[L]] +
-    Total @ Table[If[state[[s]] != 0, $fieldPhi[s], 0], {s, L^2}]]
+    (* Pair energy: sum over bonds, skip holes *)
+    Total[Map[Function[bond,
+      With[{t1 = state[[bond[[1]]]], t2 = state[[bond[[2]]]], d2 = bond[[3]]},
+        If[t1 != 0 && t2 != 0, couplingJ[t1, t2, d2], 0]]],
+      $uniqueBondsExt[L]]] +
+    (* Field energy: each occupied site contributes fieldF *)
+    Total @ Table[
+      If[state[[s]] != 0,
+         fieldF[$siteX[s, L], $siteY[s, L], L],
+         0],
+      {s, L^2}]]
 
 
 (* ================================================================
-   SECTION 9 — Virtual pair energy for VMMC link weights
-   ================================================================ *)
+   SECTION 7 — Virtual pair energy for VMMC link weights
+   ================================================================
 
-(* Pair energy between a particle of type typeI at virtual site vI
-   and a particle of type typeJ at site qSite on the L×L torus.
-   Same-site occupancy (vI == qSite) → Infinity (hard-core exclusion).
-   Uses $torusD2 so the minimum-image convention is applied correctly
-   even when vI and qSite are on opposite sides of the torus. *)
+   Pair energy between a particle of type typeI at virtual site vI
+   and a particle of type typeJ at site qSite.
+   Uses couplingJ at the torus distance; Infinity at hard-core overlap. *)
+
 $virtualPairEnergy[typeI_, typeJ_, vI_, qSite_, L_] :=
   Which[
     vI === qSite, Infinity,
     True,
       With[{d2 = $torusD2[vI, qSite, L]},
-        If[1 <= d2 <= 5, $pairJD2[d2, typeI, typeJ], 0]]]
+        If[d2 > 0 && d2 <= $maxD2, couplingJ[typeI, typeJ, d2], 0]]]
 
 
 (* ================================================================
-   SECTION 10 — VMMC cluster builder (extended range)
+   SECTION 8 — VMMC cluster builder
    ================================================================
 
-   Structure identical to $vmmcBuildCluster in vmmc_2d.wl.
-   Differences from vmmc_2d.wl:
-     • Neighbour shells use $neighborsD2 (d²≤5) instead of the
-       four nearest-neighbour directions.
-     • $virtualPairEnergy uses $torusD2 (extended range).
-   The Whitelam-Geissler link-weight logic is unchanged.
-   ================================================================ *)
+   Whitelam-Geissler link-weight logic.  Identical structure to
+   vmmc_2d.wl; uses $neighborsD2 (respects $maxD2) and
+   $virtualPairEnergy (calls couplingJ). *)
 
 $vmmcBuildCluster[state_, L_, seed_, dir_] :=
   Module[{
@@ -222,11 +257,7 @@ $vmmcBuildCluster[state_, L_, seed_, dir_] :=
       pPost = $applyDir[p,  dir, L];
       pRev  = $applyDir[p, {-dir[[1]], -dir[[2]]}, L];
 
-      (* Union of √5-shells of p, pPost, and pRev.
-         A particle q within √5 of pPost or pRev (but not currently
-         bonded to p) may have a changed pair energy with p after the
-         move and MUST be link-tested.  DeleteDuplicates prevents
-         double-testing, which matters on L=2 where right(s)=left(s). *)
+      (* Union of neighbour shells of p, pPost, and pRev *)
       nbrs = DeleteDuplicates @ Join[
                $neighborsD2[p,     L],
                $neighborsD2[pPost, L],
@@ -237,18 +268,10 @@ $vmmcBuildCluster[state_, L_, seed_, dir_] :=
         If[state[[q]] =!= 0 && !KeyExistsQ[inCluster, q],
           qType = state[[q]];
 
-          (* Three pair energies for the link-weight formula.
-             eInit: current bond energy (0 if not within range).
-             eFwd : bond energy if p moves to pPost.
-             eRev : bond energy if p moves to pRev. *)
           eInit = $virtualPairEnergy[pType, qType, p,     q, L];
           eFwd  = $virtualPairEnergy[pType, qType, pPost, q, L];
           eRev  = $virtualPairEnergy[pType, qType, pRev,  q, L];
 
-          (* wFwd = max(1 − exp(β(eInit−eFwd)), 0).
-             Piecewise — not Max — so FullSimplify can resolve J sign cases.
-             Leading Infinity guards prevent ComplexInfinity with symbolic β.
-             (Identical logic to vmmc_2d.wl.) *)
           wFwd = Piecewise[{
               {1,                                eFwd === Infinity},
               {1 - Exp[\[Beta] (eInit - eFwd)],  eInit < eFwd}},
@@ -292,50 +315,41 @@ $vmmcBuildCluster[state_, L_, seed_, dir_] :=
 
 
 (* ================================================================
-   SECTION 11 — Algorithm
+   SECTION 9 — Algorithm
    ================================================================ *)
 
 Algorithm[state_List] :=
   Module[{L, occupied, seed, dirs, dir, cluster, newState, dEField, dE},
     L = Round[Sqrt[Length[state]]];
 
-    (* Select a random occupied site as seed *)
     occupied = Flatten[Position[state, _?(# > 0 &)]];
     If[occupied === {}, Return[state]];
     seed = RandomChoice[occupied];
 
-    (* Choose a random lattice direction *)
     dirs = {{0,1},{0,-1},{1,0},{-1,0}};
     dir  = RandomChoice[dirs];
 
-    (* Attempt cluster growth; None = frustrated link → reject *)
     cluster = $vmmcBuildCluster[state, L, seed, dir];
     If[cluster === None, Return[state]];
 
-    (* Apply rigid cluster translation.
-       Clear cluster sites first, then place at destinations.
-       If any destination is occupied by a non-cluster particle,
-       reject (overlap). *)
     newState = state;
-    Do[newState[[cluster[[i]]]] = 0,            {i, Length[cluster]}];
+    Do[newState[[cluster[[i]]]] = 0, {i, Length[cluster]}];
     Do[With[{dest = $applyDir[cluster[[i]], dir, L]},
          If[newState[[dest]] =!= 0, Return[state, Module]];
          newState[[dest]] = state[[cluster[[i]]]]
        ], {i, Length[cluster]}];
 
-    (* Post-cluster Metropolis filter for field energy change.
-       ΔE_field = Σ_{p in cluster} [Phi(dest(p)) − Phi(p)].
-       The VMMC link-weight mechanism handles all pair-energy changes
-       and enforces superdetailed balance for the pair interactions.
-       This Metropolis step is the correct correction for the
-       position-dependent single-particle field term. *)
+    (* Post-cluster Metropolis for field energy change.
+       ΔE_field = Σ_{p in cluster} [fieldF(dest(p)) − fieldF(p)]
+       fieldF and $siteX/$siteY always produce integer arguments. *)
     dEField = Total @ Table[
-      $fieldPhi[$applyDir[cluster[[i]], dir, L]] - $fieldPhi[cluster[[i]]],
+      fieldF[$siteX[$applyDir[cluster[[i]], dir, L], L],
+             $siteY[$applyDir[cluster[[i]], dir, L], L], L] -
+      fieldF[$siteX[cluster[[i]], L],
+             $siteY[cluster[[i]], L], L],
       {i, Length[cluster]}];
     If[RandomReal[] >= MetropolisProb[dEField], Return[state]];
 
-    (* Interface compliance: MetropolisProb on the total energy change.
-       Not used for acceptance — VMMC pair DB is enforced by link weights. *)
     dE = energy[newState] - energy[state];
     MetropolisProb[dE];
 
@@ -344,10 +358,9 @@ Algorithm[state_List] :=
 
 
 (* ================================================================
-   SECTION 12 — Checker interface   (identical to vmmc_2d.wl)
+   SECTION 10 — Checker interface   (identical to vmmc_2d.wl)
    ================================================================ *)
 
-(* Accept only IDs whose decoded array has perfect-square length *)
 BitsToState[bits_List] :=
   Module[{id = FromDigits[bits, 2], state, sqrtM},
     If[id == 0, Return[None]];
@@ -356,7 +369,6 @@ BitsToState[bits_List] :=
     If[!IntegerQ[sqrtM], Return[None]];
     state]
 
-(* Display state as row strings: {1,2}|{3,0} for a 2×2 state *)
 DisplayState[state_List] :=
   With[{L = Round[Sqrt[Length[state]]]},
     StringJoin @ Riffle[
@@ -364,7 +376,6 @@ DisplayState[state_List] :=
             {r, 1, L}],
       "|"]]
 
-(* Return all integer IDs that decode to L×L arrays with ID ≤ maxId *)
 ValidStateIDs[maxId_Integer] :=
   Module[{L = 1, ids = {}},
     While[$cLPre[L^2] <= maxId,
@@ -372,21 +383,15 @@ ValidStateIDs[maxId_Integer] :=
       L++];
     ids]
 
-(* DynamicSymParams: declare the free symbolic parameters for each
-   connected component.  Only d²=1 coupling symbols are declared;
-   longer-range couplings are numerically 0 and need no symbol.
-   Field and coupling symbols both go under "couplings" so that
-   check.wls / report.wls assign numeric values to all of them. *)
+(* DynamicSymParams: returns the free symbolic parameters for this
+   component.  The per-pair $jPairSym symbols are auto-generated from
+   the particle types present; the user's $fieldFreeParams and
+   $couplingFreeParams supply any additional free parameters. *)
 DynamicSymParams[states_List] :=
-  Module[{types = Sort[DeleteCases[Union @@ states, 0]],
-          L = Round[Sqrt[Length[First[states]]]]},
-    <|"couplings" ->
-        Join[
-          Flatten @ Table[
-            If[a < b,
-              {ToExpression["Jd1" <> ToString[a] <> ToString[b]]},
-              Nothing],
-            {a, types}, {b, types}],
-          Table[ToExpression["Phi" <> ToString[s]], {s, L^2}]]|>]
+  Module[{types = Sort[DeleteCases[Union @@ states, 0]], jPairSyms},
+    jPairSyms = Flatten @ Table[
+      If[a < b, {$jPairSym[a, b]}, Nothing],
+      {a, types}, {b, types}];
+    <|"couplings" -> Join[$fieldFreeParams, $couplingFreeParams, jPairSyms]|>]
 
 numBeta = 1
