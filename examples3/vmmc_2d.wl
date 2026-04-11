@@ -115,17 +115,17 @@ $applyDir[s_, {dr_, dc_}, L_] :=
   Mod[Ceiling[s/L] - 1 + dr, L]*L + Mod[Mod[s-1, L] + dc, L] + 1
 
 
-(* ---- Coupling constants (identical to kawasaki_2d.wl) ------------------- *)
+(* ---- Coupling function --------------------------------------------------- *)
 
-$pairJ[a_, b_] :=
-  If[a == 0 || b == 0, 0,
-     ToExpression["J" <> ToString[Min[a,b]] <> ToString[Max[a,b]]]]
+(* Nearest-neighbour only: couplingJ = 0 for d² ≠ 1 or if either site is a hole. *)
+couplingJ[a_Integer, b_Integer, d2_Integer] :=
+  If[a == 0 || b == 0 || d2 != 1, 0, $jPairSym[a, b]]
 
 DynamicSymParams[states_List] :=
   Module[{types = Sort[DeleteCases[Union @@ states, 0]]},
     <|"couplings" ->
       Flatten @ Table[
-        If[a < b, ToExpression["J" <> ToString[a] <> ToString[b]], Nothing],
+        If[a < b, {$jPairSym[a, b]}, Nothing],
         {a, types}, {b, types}]|>]
 
 
@@ -141,7 +141,7 @@ $uniqueBonds2D[L_] := $uniqueBonds2D[L] =
 
 energy[state_List] :=
   With[{L = Round[Sqrt[Length[state]]]},
-    Total[$pairJ[state[[#[[1]]]], state[[#[[2]]]]] & /@ $uniqueBonds2D[L]]]
+    Total[couplingJ[state[[#[[1]]]], state[[#[[2]]]], 1] & /@ $uniqueBonds2D[L]]]
 
 
 (* ---- VMMC helpers -------------------------------------------------------- *)
@@ -150,12 +150,12 @@ energy[state_List] :=
    and a particle of type typeJ currently at site qSite.
    Same-site occupancy (vI == qSite) is hard-coded as Infinity, encoding
    the infinite hard-sphere repulsion that lattice exclusion imposes.
-   NN adjacency gives the standard J coupling; beyond NN gives 0. *)
+   NN adjacency gives couplingJ at d²=1; beyond NN gives 0. *)
 $virtualPairEnergy[typeI_, typeJ_, vI_, qSite_, L_] :=
   Which[
-    vI === qSite,                          Infinity,
-    MemberQ[$allNeighbors2D[vI, L], qSite], $pairJ[typeI, typeJ],
-    True,                                  0]
+    vI === qSite,                           Infinity,
+    MemberQ[$allNeighbors2D[vI, L], qSite], couplingJ[typeI, typeJ, 1],
+    True,                                   0]
 
 
 (* ---- VMMC cluster builder ------------------------------------------------ *)

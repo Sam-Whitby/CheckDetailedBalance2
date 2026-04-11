@@ -77,24 +77,23 @@ $shiftSite2D[s_, dir_, L_] :=
         True,     $up2D[s, L]]
 
 
-(* ---- Coupling constants -------------------------------------------------- *)
+(* ---- Coupling function --------------------------------------------------- *)
 
-$pairJ[a_, b_] :=
-  If[a == 0 || b == 0, 0,
-     ToExpression["J" <> ToString[Min[a,b]] <> ToString[Max[a,b]]]]
+couplingJ[a_Integer, b_Integer, d2_Integer] :=
+  If[a == 0 || b == 0 || d2 != 1, 0, $jPairSym[a, b]]
 
 DynamicSymParams[states_List] :=
   Module[{types = Sort[DeleteCases[Union @@ states, 0]]},
     <|"couplings" ->
       Flatten @ Table[
-        If[a < b, ToExpression["J" <> ToString[a] <> ToString[b]], Nothing],
+        If[a < b, {$jPairSym[a, b]}, Nothing],
         {a, types}, {b, types}]|>]
 
 energy[state_List] :=
   With[{L = Round[Sqrt[Length[state]]]},
     Total[Table[
-      $pairJ[state[[s]], state[[$right2D[s, L]]]] +
-      $pairJ[state[[s]], state[[$down2D[s, L]]]],
+      couplingJ[state[[s]], state[[$right2D[s, L]]], 1] +
+      couplingJ[state[[s]], state[[$down2D[s, L]]], 1],
       {s, Length[state]}]]]
 
 

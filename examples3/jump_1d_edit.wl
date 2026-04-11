@@ -83,22 +83,16 @@ $decode[id_Integer] :=
     Do[arr[[pos[[i]] + 1]] = perm[[i]], {i, N}]; arr]
 
 
-(* ---- Coupling constants -------------------------------------------------- *)
+(* ---- Coupling function --------------------------------------------------- *)
 
-(* J_ab: interaction energy between adjacent particles of types a and b.
-   Holes (type 0) do not interact. Symbol name is J<min><max>. *)
-$pairJ[a_, b_] :=
-  If[a == 0 || b == 0, 0,
-     ToExpression["J" <> ToString[Min[a,b]] <> ToString[Max[a,b]]]]
+couplingJ[a_Integer, b_Integer, d2_Integer] :=
+  If[a == 0 || b == 0 || d2 != 1, 0, $jPairSym[a, b]]
 
-(* Called by the checker once per connected component to determine which
-   J symbols are actually needed. Generates J_ab for every pair of particle
-   types present in the component -- no hardcoded particle-type limit. *)
 DynamicSymParams[states_List] :=
   Module[{types = Sort[DeleteCases[Union @@ states, 0]]},
     <|"couplings" ->
       Flatten @ Table[
-        If[a < b, ToExpression["J" <> ToString[a] <> ToString[b]], Nothing],
+        If[a < b, {$jPairSym[a, b]}, Nothing],
         {a, types}, {b, types}]|>]
 
 
@@ -106,7 +100,7 @@ DynamicSymParams[states_List] :=
 
 energy[state_List] :=
   With[{L = Length[state]},
-    Total[Table[$pairJ[state[[i]], state[[Mod[i, L] + 1]]], {i, L}]]]
+    Total[Table[couplingJ[state[[i]], state[[Mod[i, L] + 1]], 1], {i, L}]]]
 
 
 (* ---- Normal bin weight --------------------------------------------------- *)

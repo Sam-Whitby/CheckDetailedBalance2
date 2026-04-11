@@ -62,10 +62,6 @@
      valid — it simply restricts the model to nearest-neighbour bonds.
    ================================================================ *)
 
-(* Per-pair coupling strength symbol: Jpair<lo><hi>, symmetric by construction *)
-$jPairSym[a_Integer, b_Integer] :=
-  ToExpression["Jpair" <> ToString[Min[a, b]] <> ToString[Max[a, b]]]
-
 (* ---- EXAMPLE FIELD: sinusoidal in the x (column) direction ---- *)
 (* fieldAmp is the field amplitude — a single free symbolic parameter.
    For an L×L lattice with x ∈ {0,...,L-1}:

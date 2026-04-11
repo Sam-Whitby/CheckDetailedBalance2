@@ -35,6 +35,16 @@
 
 $dbcDir = DirectoryName[$InputFileName];
 
+(* ----------------------------------------------------------------
+   $jPairSym
+   Returns the canonical per-type-pair coupling symbol Jpair<lo><hi>.
+   Symmetric by construction: $jPairSym[a,b] = $jPairSym[b,a].
+   Available to all algorithm files; defined here so it does not need
+   to be redefined in each .wl file.
+   ---------------------------------------------------------------- *)
+$jPairSym[a_Integer, b_Integer] :=
+  ToExpression["Jpair" <> ToString[Min[a, b]] <> ToString[Max[a, b]]]
+
 
 (* ================================================================
    SECTION 0 – SYSTEM PARAMETER UTILITIES
