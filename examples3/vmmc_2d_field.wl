@@ -83,6 +83,10 @@ $maxD2 = 1
    numerical runs. Do NOT remove this line. ---- *)
 $abstractFunctions = True
 
+(* ---- Human-readable formula strings shown in the animation panel ---- *)
+$couplingFormulaStr = "Jpair_ab * Exp[-lambdaJ * d2]"
+$fieldFormulaStr    = "fieldAmp * Sin[Pi * (x+1) / L]"
+
 
 (* ================================================================
    SECTION 1 — Bijective integer encoding   (identical to vmmc_2d.wl)

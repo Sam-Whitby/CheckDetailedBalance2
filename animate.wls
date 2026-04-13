@@ -226,16 +226,18 @@ Print["Recorded ", Length[stepsRec], " frames. Launching plot..."];
 (* ---- Write JSON data file ---- *)
 dataFile = FileNameJoin[{$TemporaryDirectory, "dbc_animate_data.json"}];
 Export[dataFile,
-  <|"algo_file"  -> algFile,
-    "grid_rows"  -> nRows,
-    "grid_cols"  -> nCols,
-    "n_types"    -> If[types === {}, 0, Max[types]],
-    "fps"        -> fps,
-    "simple"     -> simpleMode,
-    "steps"      -> stepsRec,
-    "states"     -> statesRec,
-    "energies"   -> energiesRec,
-    "params"     -> Join[<|"beta" -> $animBeta|>, jAssigned]|>];
+  <|"algo_file"         -> algFile,
+    "grid_rows"         -> nRows,
+    "grid_cols"         -> nCols,
+    "n_types"           -> If[types === {}, 0, Max[types]],
+    "fps"               -> fps,
+    "simple"            -> simpleMode,
+    "steps"             -> stepsRec,
+    "states"            -> statesRec,
+    "energies"          -> energiesRec,
+    "params"            -> Join[<|"beta" -> $animBeta|>, jAssigned],
+    "coupling_formula"  -> If[ValueQ[$couplingFormulaStr], $couplingFormulaStr, ""],
+    "field_formula"     -> If[ValueQ[$fieldFormulaStr],    $fieldFormulaStr,    ""]|>];
 
 (* ---- Launch Python animation ---- *)
 pyScript = FileNameJoin[{scriptDir, "animate_plot.py"}];
