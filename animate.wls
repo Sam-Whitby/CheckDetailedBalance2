@@ -179,7 +179,7 @@ jAssigned = jAllSupplied;   (* start from explicitly supplied; will add auto-ass
 Do[If[a < b,
   With[{key = "J" <> ToString[a] <> ToString[b]},
     If[!KeyExistsQ[jAllSupplied, key],
-      With[{val = RandomVariate[NormalDistribution[0, 1]]},
+      With[{val = RandomReal[{0.4, 1.0}] * RandomChoice[{-1, 1}]},
         Set[Evaluate[ToExpression[key]], val];
         AssociateTo[jAssigned, key -> val]]]]],
   {a, types}, {b, types}];
@@ -199,7 +199,10 @@ If[$dynSymNames =!= {},
   Scan[Function[name,
     With[{sym = ToExpression[name]},
       If[!NumericQ[sym],
-        Set[Evaluate[sym], RandomReal[{-1, 1}]]]]],
+        (* Use magnitude in [0.4, 1.0] with random sign so no coupling is
+           near-zero (which would appear white in the coupling matrix). *)
+        Set[Evaluate[sym],
+            RandomReal[{0.4, 1.0}] * RandomChoice[{-1, 1}]]]]],
     $dynSymNames];
   jAssigned = Association @ Map[
     Function[name, name -> N[ToExpression[name]]],

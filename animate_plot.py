@@ -15,6 +15,7 @@ Displays three panels:
 """
 
 import json
+import os
 import re
 import sys
 import numpy as np
@@ -108,19 +109,20 @@ def draw_coupling_matrix(ax, cbar_ax, matrix: np.ndarray, n_types: int):
     Draw a colour-coded Jpair(a,b) heatmap on *ax* with a colourbar on
     *cbar_ax*.  Diverging RdBu_r colourmap centred at zero.
     """
-    # RdBu: red = negative (repulsive, J<0), white = 0, blue = positive (attractive, J>0)
+    # RdBu: blue = positive J (attractive), white = 0, red = negative J (repulsive)
     vabs = max(float(np.abs(matrix).max()), 1e-10)
     norm = TwoSlopeNorm(vmin=-vabs, vcenter=0.0, vmax=vabs)
     im = ax.imshow(matrix, cmap="RdBu", norm=norm, aspect="equal",
                    interpolation="nearest")
 
-    ticks  = list(range(n_types))
-    labels = [str(k + 1) for k in range(n_types)]
-    ax.set_xticks(ticks);  ax.set_xticklabels(labels, fontsize=8)
-    ax.set_yticks(ticks);  ax.set_yticklabels(labels, fontsize=8)
+    # Show only the first (1) and last (N) tick labels to avoid clutter
+    ax.set_xticks([0, n_types - 1])
+    ax.set_xticklabels(["1", str(n_types)], fontsize=9)
+    ax.set_yticks([0, n_types - 1])
+    ax.set_yticklabels(["1", str(n_types)], fontsize=9)
     ax.set_xlabel("Type b", fontsize=8)
     ax.set_ylabel("Type a", fontsize=8)
-    ax.set_title("Jpair(a,b)  blue=attractive  red=repulsive", fontsize=8, pad=4)
+    ax.set_title("Jpair(a,b)  blue=+  white=0  red=\u2212", fontsize=8, pad=4)
 
     cbar = plt.colorbar(im, cax=cbar_ax)
     cbar.ax.tick_params(labelsize=7)
@@ -330,33 +332,42 @@ def main():
     # ------------------------------------------------------------------ #
     # Animation
     # ------------------------------------------------------------------ #
+    # Use frames=None (infinite counter) so FuncAnimation never auto-stops
+    # its timer.  On macOS/Tkinter, having the timer stop itself (repeat=False)
+    # races with the Tk event loop teardown and causes a SIGSEGV inside
+    # mach_vm_allocate_kernel.  Instead we clamp the frame index to the last
+    # frame so the display freezes after all frames are shown, and we let the
+    # user close the window explicitly.  blit is always False to avoid the
+    # extra blitting code path that triggers the same crash on some macOS
+    # matplotlib builds.
     def update(frame: int):
-        im.set_data(to_grid(states[frame]))
-        ax_grid.set_title(f"Step {steps[frame]}", fontsize=10)
+        i = min(frame, n_frames - 1)   # freeze on last frame once done
 
-        xs.append(steps[frame])
-        ys.append(energies[frame])
-        e_line.set_data(xs, ys)
-        e_dot.set_data([xs[-1]], [ys[-1]])
-        e_text.set_text(f"E = {energies[frame]:.4f}")
+        im.set_data(to_grid(states[i]))
+        ax_grid.set_title(f"Step {steps[i]}", fontsize=10)
+
+        if frame < n_frames:
+            xs.append(steps[i])
+            ys.append(energies[i])
+            e_line.set_data(xs, ys)
+            e_dot.set_data([xs[-1]], [ys[-1]])
+            e_text.set_text(f"E = {energies[i]:.4f}")
 
         return im, e_line, e_dot, e_text
 
     ani = animation.FuncAnimation(
-        fig, update, frames=n_frames,
-        interval=delay_ms, blit=simple, repeat=False)
+        fig, update,
+        frames=None,        # infinite — timer never auto-stops
+        interval=delay_ms,
+        blit=False,         # avoid blit teardown crash on macOS
+        cache_frame_data=False)
 
-    # Stop the animation timer when the window is closed.  Without this the
-    # timer fires into a partially-torn-down Tcl/Tk runtime on macOS, causing
-    # a SIGSEGV in mach_vm_allocate_kernel that surfaces as a macOS Problem
-    # Report.  After plt.show() returns we call sys.exit(0) explicitly so
-    # Python skips its normal atexit / GC sweep of matplotlib GUI objects,
-    # which is the other common trigger for the same crash.
+    # On window close, hard-exit the process immediately.  os._exit(0) bypasses
+    # all Python atexit handlers and GC finalizers, which is what triggers the
+    # macOS SIGSEGV: Python tries to GC matplotlib Tk objects after Tk has
+    # already shut down.
     def on_close(_event):
-        try:
-            ani.event_source.stop()
-        except Exception:
-            pass
+        os._exit(0)
 
     fig.canvas.mpl_connect("close_event", on_close)
 
@@ -365,7 +376,7 @@ def main():
     except Exception:
         pass
 
-    sys.exit(0)
+    os._exit(0)
 
 
 if __name__ == "__main__":
