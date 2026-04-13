@@ -95,8 +95,20 @@ If[!FileExistsQ[algFile],
   Print["ERROR: File not found: ", posArgs[[1]]]; Exit[1]];
 
 ClearAll[Algorithm, energy, BitsToState, numBeta, symParams, DynamicSymParams, DisplayState,
-         AnimationSetupCouplings];
+         AnimationSetupCouplings,
+         fieldF, couplingJ,
+         $fieldFConcrete, $couplingJConcrete, $abstractFunctions, $concreteParams,
+         $fieldFreeParams, $couplingFreeParams];
 Get[algFile];
+
+(* ---- Activate concrete function implementations (abstract-function mode) ----
+   In files where fieldF and couplingJ have no DownValues ($abstractFunctions=True),
+   permanently install the concrete implementations for this animation run. *)
+If[ValueQ[$abstractFunctions] && TrueQ[$abstractFunctions],
+  If[Length[DownValues[$fieldFConcrete]] > 0,
+    fieldF[x_Integer, y_Integer, L_Integer] := $fieldFConcrete[x, y, L]];
+  If[Length[DownValues[$couplingJConcrete]] > 0,
+    couplingJ[a_Integer, b_Integer, d2_Integer] := $couplingJConcrete[a, b, d2]]];
 
 If[Length[DownValues[Algorithm]] == 0,
   Print["ERROR: 'Algorithm' not defined in ", algFile]; Exit[1]];
@@ -131,12 +143,18 @@ types = Sort[DeleteCases[initialState, 0]];
 
 (* 3. Pre-collect DynamicSymParams symbol names as strings BEFORE any assignments.
       At this point all symbols are unbound, so ToString gives their names correctly.
-      Must happen before steps 4-6 which set symbol values. *)
+      Must happen before steps 4-6 which set symbol values.
+      For abstract-function files ($abstractFunctions=True), DynamicSymParams returns
+      function-application atoms (like fieldF[0,0,2]) under "couplings" — these cannot
+      be assigned random numeric values directly.  Instead we use the "numericParams"
+      key, which holds the scalar symbols that need values (Jpair12, fieldAmp, etc.). *)
 $dynSymNames = {};
 If[Length[DownValues[DynamicSymParams]] > 0,
   With[{dynP = DynamicSymParams[{initialState}]},
     $dynSymNames = Map[ToString,
-      Join[Lookup[dynP, "eps", {}], Lookup[dynP, "couplings", {}]]]]];
+      If[ValueQ[$abstractFunctions] && TrueQ[$abstractFunctions],
+         Join[Lookup[dynP, "eps", {}], Lookup[dynP, "numericParams", {}]],
+         Join[Lookup[dynP, "eps", {}], Lookup[dynP, "couplings",     {}]]]]]];
 
 (* 4. Set all explicitly supplied J symbols immediately *)
 KeyValueMap[Function[{name, val},

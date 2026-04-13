@@ -94,7 +94,10 @@ If[!FileExistsQ[algFile],
   Print["ERROR: File not found: ", posArgs[[1]]]; Exit[1]];
 
 (* ---- Load algorithm file ---- *)
-ClearAll[Algorithm, energy, BitsToState, numBeta, symParams, DynamicSymParams, DisplayState];
+ClearAll[Algorithm, energy, BitsToState, numBeta, symParams, DynamicSymParams, DisplayState,
+         fieldF, couplingJ,
+         $fieldFConcrete, $couplingJConcrete, $abstractFunctions, $concreteParams,
+         $fieldFreeParams, $couplingFreeParams];
 Print["Loading: ", algFile];
 Get[algFile];
 
@@ -116,8 +119,10 @@ $hasDynParams = Length[DownValues[DynamicSymParams]] > 0;
 (* ---- Verify couplingJ symmetry (if defined) ---- *)
 (* Check type pairs {1..5} at d²∈{1,2,4,5,8,9,10} — covers all
    physically relevant cases.  Uses Simplify only: negligible overhead.
-   An asymmetric coupling immediately implies a DB violation. *)
-If[Length[DownValues[couplingJ]] > 0,
+   An asymmetric coupling immediately implies a DB violation.
+   In abstract-function mode ($abstractFunctions=True), couplingJ has no
+   DownValues; we check $couplingJConcrete instead via a temporary Block. *)
+$checkCouplingSymmetry[] := (
   $coupSymViolations = CheckCouplingSymmetry[{1,2,3,4,5}, {1,2,4,5,8,9,10}];
   If[$coupSymViolations =!= {},
     Print["ERROR: couplingJ is NOT symmetric — detailed balance cannot hold."];
@@ -126,7 +131,14 @@ If[Length[DownValues[couplingJ]] > 0,
           "  d2=", $coupSymViolations[[1]]["d2"],
           "  J[a,b]-J[b,a] = ", $coupSymViolations[[1]]["asymmetry"]];
     Exit[1]];
-  Print["couplingJ symmetry: PASS"]];
+  Print["couplingJ symmetry: PASS"]);
+Which[
+  Length[DownValues[couplingJ]] > 0,
+    $checkCouplingSymmetry[],
+  Length[DownValues[$couplingJConcrete]] > 0,
+    Block[{couplingJ},
+      couplingJ[a_Integer, b_Integer, d2_Integer] := $couplingJConcrete[a, b, d2];
+      $checkCouplingSymmetry[]]];
 
 (* Static symbolic parameters (may be None if only DynamicSymParams is used) *)
 $staticSysParams = If[ValueQ[symParams], symParams, None];
@@ -267,14 +279,24 @@ Do[
 
   (* ---- Per-component symbolic parameters ---- *)
   (* If DynamicSymParams is defined, call it with this component's states
-     to get exactly the symbolic variables needed (e.g. the J_ab coupling
-     symbols for the particle types actually present). Merge with any
-     static symParams from the .wl file. *)
+     to get exactly the symbolic variables needed.
+     "couplings" / "eps" — symbolic atoms for FullSimplify assumptions.
+       For standard files these are scalar symbols like Jpair12.
+       For abstract-function files these are function-application atoms
+       like fieldF[0,0,2] and couplingJ[1,2,1]; FullSimplify treats each
+       unevaluated application as an independent real atom.
+     "numericParams" — scalar symbols for the numerical MCMC Block.
+       For standard files same as "couplings".
+       For abstract-function files: the $jPairSym symbols plus the
+       concrete-implementation parameters (fieldAmp, lambdaJ, etc.). *)
   If[$hasDynParams,
-    dynP    = DynamicSymParams[allStates];
-    dynVars = Join[Lookup[dynP, "eps", {}], Lookup[dynP, "couplings", {}]];
-    compSymVars = Union[$staticSymVars, dynVars],
-    compSymVars = $staticSymVars];
+    dynP         = DynamicSymParams[allStates];
+    dynVars      = Join[Lookup[dynP, "eps", {}], Lookup[dynP, "couplings", {}]];
+    dynNumVars   = Lookup[dynP, "numericParams", dynVars];
+    compSymVars    = Union[$staticSymVars, dynVars];
+    compNumericVars = Union[$staticSymVars, dynNumVars],
+    compSymVars    = $staticSymVars;
+    compNumericVars = $staticSymVars];
   (* Fixed params are real for FullSimplify purposes (e.g. jumpSigma ∈ Reals) *)
   compSymAssumptions = Map[Element[#, Reals] &, Union[compSymVars, $fixedSymVars]];
 
@@ -289,20 +311,35 @@ Do[
   (* ---- Numerical MCMC check ---- *)
   klStr = "-"; numResult = "-";
   If[mode =!= "Symbolic" && nStates > 1,
-    (* Energy-coupling symbols get reproducible random values in [-1,1];
-       fixed params (e.g. jumpSigma) get their declared numeric values. *)
-    allBlockVars = Union[compSymVars, $fixedSymVars];
+    (* compNumericVars contains the scalar symbols that need numeric values:
+       for standard files these are the coupling symbols (Jpair12 etc.);
+       for abstract-function files these are $jPairSym symbols plus the
+       concrete-implementation parameters (fieldAmp, lambdaJ, etc.). *)
+    allBlockVars = Union[compNumericVars, $fixedSymVars];
+    (* Helper that runs the MCMC inside the current Block scope *)
+    $runNumericalMCMC[] := (
+      mcmcCounts = RunNumericalMCMCAT[allStates, $alg, $numBeta, "NSteps" -> nSteps];
+      boltzmann  = BoltzmannWeightsAT[allStates, $energy, $numBeta]);
+    (* For abstract-function files: activate concrete fieldF / couplingJ
+       implementations inside an outer Block before running MCMC. *)
+    $activateAndRun[] :=
+      If[ValueQ[$abstractFunctions] && TrueQ[$abstractFunctions],
+        Block[{fieldF, couplingJ},
+          If[Length[DownValues[$fieldFConcrete]] > 0,
+            fieldF[x_Integer, y_Integer, L_Integer] := $fieldFConcrete[x, y, L]];
+          If[Length[DownValues[$couplingJConcrete]] > 0,
+            couplingJ[a_Integer, b_Integer, d2_Integer] := $couplingJConcrete[a, b, d2]];
+          $runNumericalMCMC[]],
+        $runNumericalMCMC[]];
     If[allBlockVars =!= {},
       SeedRandom[42];
-      compNumVals = If[compSymVars =!= {}, RandomReal[{-1, 1}, Length[compSymVars]], {}];
+      compNumVals = If[compNumericVars =!= {}, RandomReal[{-1, 1}, Length[compNumericVars]], {}];
       Block[Evaluate[allBlockVars],
-        If[compSymVars =!= {}, MapThread[Set, {compSymVars, compNumVals}]];
+        If[compNumericVars =!= {}, MapThread[Set, {compNumericVars, compNumVals}]];
         If[$fixedSymVars =!= {}, MapThread[Set, {$fixedSymVars, $fixedNumVals}]];
-        mcmcCounts = RunNumericalMCMCAT[allStates, $alg, $numBeta, "NSteps" -> nSteps];
-        boltzmann  = BoltzmannWeightsAT[allStates, $energy, $numBeta]],
+        $activateAndRun[]],
       (* Fully numeric: no symbolic vars of any kind *)
-      mcmcCounts = RunNumericalMCMCAT[allStates, $alg, $numBeta, "NSteps" -> nSteps];
-      boltzmann  = BoltzmannWeightsAT[allStates, $energy, $numBeta]];
+      $activateAndRun[]];
     simFreq = N[# / Total[mcmcCounts]] & /@ mcmcCounts;
     kl = Total @ Table[
       With[{p = simFreq[s], q = N @ boltzmann[s]},

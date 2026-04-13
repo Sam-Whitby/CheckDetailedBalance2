@@ -4,14 +4,19 @@
    fully-periodic (torus) square lattice.
    ================================================================
 
-   The field f(x,y) and coupling J(a,b,d²) are defined as ordinary
-   Mathematica functions in Section 0 below.  The checker proves
-   detailed balance symbolically for ALL values of any free parameters
-   in these functions simultaneously.
+   The field f(x,y) and coupling J(a,b,d²) are supplied by the user
+   in Section 0 below as concrete functions used for numerical runs.
 
-   This example defines:
-     fieldF     – sinusoidal field in the x-direction
-     couplingJ  – exponential decay with a per-type-pair amplitude
+   For the SYMBOLIC detailed-balance check the concrete definitions
+   are NOT used.  Instead, fieldF and couplingJ have no DownValues
+   during the check, so every site-value fieldF[x,y,L] and every
+   pair-value couplingJ[a,b,d²] is treated as an independent free
+   real atom by FullSimplify.  This proves detailed balance for ALL
+   possible field and coupling functions simultaneously — not just
+   the specific sinusoidal/exponential forms defined below.
+
+   Concrete functions are activated (via Block) only when numerical
+   MCMC verification or animation runs are performed.
 
    To use a different model, edit Section 0 only.
 
@@ -29,64 +34,54 @@
    SECTION 0 — USER INTERFACE: field and coupling functions
    ================================================================
 
-   Edit this section to define your physical model.
+   HOW THIS WORKS
+   ──────────────
+   Two modes are used automatically:
 
-   fieldF[x, y, L]
-     Field energy felt by any particle at lattice column x, row y
-     (both 0-indexed integers, x,y ∈ {0,...,L-1}) on an L×L lattice.
-     Evaluated with integer arguments; use _Integer patterns.
+   SYMBOLIC (detailed-balance check):
+     fieldF and couplingJ have NO DownValues.  Expressions like
+     fieldF[0,0,2] and couplingJ[1,2,1] remain as independent
+     unevaluated atoms — like free symbols — so the checker proves
+     detailed balance for ALL possible field and coupling functions
+     simultaneously, without any assumption about their specific form.
 
-   couplingJ[a, b, d2]
-     Pair interaction between particle types a and b at squared
-     distance d2 (always a positive integer on an integer lattice).
-     MUST satisfy couplingJ[a,b,d2] = couplingJ[b,a,d2].
-     The checker verifies this before running; an asymmetric coupling
-     immediately implies a detailed-balance violation.
-     Use $jPairSym[a,b] for a per-type-pair coupling symbol
-     (it is symmetric by construction: $jPairSym[a,b] = $jPairSym[b,a]).
+   NUMERICAL (MCMC verification and animation):
+     $fieldFConcrete and $couplingJConcrete provide concrete
+     implementations that are activated inside a Block.
+     $concreteParams supplies numeric values for their parameters.
 
-   $fieldFreeParams
-     List every free symbolic parameter that appears in fieldF
-     (do not include x, y, L — those are always concrete integers).
-
-   $couplingFreeParams
-     List every free symbolic parameter that appears in couplingJ
-     beyond the per-pair $jPairSym symbols (which are auto-discovered).
-
-   $maxD2
-     Maximum squared distance included in bonds and neighbour shells.
-     1 = nearest-neighbour only (fastest checker, d = 1).
-     5 = includes d = 1, √2, 2, √5 (more realistic, slower).
-     The coupling function is evaluated at all active bond distances,
-     so setting $maxD2 = 1 while couplingJ is nonzero at larger d2 is
-     valid — it simply restricts the model to nearest-neighbour bonds.
+   TO CUSTOMISE THE MODEL
+   ──────────────────────
+   Edit only this section:
+     $fieldFConcrete    — your field function f(x, y, L)
+     $couplingJConcrete — your coupling J(a, b, d²); MUST be symmetric
+     $concreteParams    — numeric values for the parameters used above
+     $maxD2             — maximum squared-distance for bonds
    ================================================================ *)
 
-(* ---- EXAMPLE FIELD: sinusoidal in the x (column) direction ---- *)
-(* fieldAmp is the field amplitude — a single free symbolic parameter.
-   For an L×L lattice with x ∈ {0,...,L-1}:
-     x=0 → fieldAmp·Sin[π/L]
-     x=1 → fieldAmp·Sin[2π/L]
-     ...
-   Mathematica evaluates Sin at rational multiples of π exactly. *)
-fieldF[x_Integer, y_Integer, L_Integer] :=
+(* ---- CONCRETE field: sinusoidal in the x (column) direction ---- *)
+(* For an L×L lattice with 0-indexed column x ∈ {0,...,L-1}:
+     x=0 → fieldAmp · Sin[π/L]
+     x=1 → fieldAmp · Sin[2π/L]  ...                                *)
+$fieldFConcrete[x_Integer, y_Integer, L_Integer] :=
   fieldAmp * Sin[\[Pi] * (x + 1) / L]
 
-(* ---- EXAMPLE COUPLING: exponential decay with per-pair amplitude ---- *)
-(* lambdaJ is the decay rate (one shared free parameter).
-   $jPairSym[a,b] is an independent amplitude symbol per type pair.
-   couplingJ[a,b,d2] = Jpair<lo><hi> · exp(−λ d²)
-   This is symmetric: couplingJ[a,b,d2] = couplingJ[b,a,d2]. ✓ *)
-couplingJ[a_Integer, b_Integer, d2_Integer] :=
+(* ---- CONCRETE coupling: exponential decay with per-pair amplitude ---- *)
+(* $jPairSym[a,b] = Jpair<lo><hi> is symmetric by construction.
+   couplingJ[a,b,d²] = Jpair<lo><hi> · exp(−λ d²)  ✓ symmetric     *)
+$couplingJConcrete[a_Integer, b_Integer, d2_Integer] :=
   $jPairSym[a, b] * Exp[-lambdaJ * d2]
 
-(* Free parameters for the checker
-   (per-pair $jPairSym symbols are auto-added by DynamicSymParams) *)
-$fieldFreeParams    = {fieldAmp};
-$couplingFreeParams = {lambdaJ};
+(* ---- Numeric parameter values for MCMC and animation runs ---- *)
+$concreteParams = <|fieldAmp -> 1.0, lambdaJ -> 0.5|>
 
-(* Nearest-neighbour only by default for checker speed *)
-$maxD2 = 1;
+(* ---- Nearest-neighbour only by default (fastest symbolic check) ---- *)
+$maxD2 = 1
+
+(* ---- Flag: tells check.wls / report.wls / animate.wls that fieldF and
+   couplingJ have no DownValues and need Block-based activation for
+   numerical runs. Do NOT remove this line. ---- *)
+$abstractFunctions = True
 
 
 (* ================================================================
@@ -200,10 +195,14 @@ $uniqueBondsExt[L_] := $uniqueBondsExt[L] =
 
 energy[state_List] :=
   With[{L = Round[Sqrt[Length[state]]]},
-    (* Pair energy: sum over bonds, skip holes *)
+    (* Pair energy: sum over bonds, skip holes.
+       Min/Max canonicalises argument order so couplingJ is always called
+       with a ≤ b — ensuring the same symbolic atom is used regardless of
+       which end of a bond carries which particle type. *)
     Total[Map[Function[bond,
       With[{t1 = state[[bond[[1]]]], t2 = state[[bond[[2]]]], d2 = bond[[3]]},
-        If[t1 != 0 && t2 != 0, couplingJ[t1, t2, d2], 0]]],
+        If[t1 != 0 && t2 != 0,
+           couplingJ[Min[t1,t2], Max[t1,t2], d2], 0]]],
       $uniqueBondsExt[L]]] +
     (* Field energy: each occupied site contributes fieldF *)
     Total @ Table[
@@ -226,7 +225,9 @@ $virtualPairEnergy[typeI_, typeJ_, vI_, qSite_, L_] :=
     vI === qSite, Infinity,
     True,
       With[{d2 = $torusD2[vI, qSite, L]},
-        If[d2 > 0 && d2 <= $maxD2, couplingJ[typeI, typeJ, d2], 0]]]
+        (* Min/Max canonicalises argument order — same convention as energy[] *)
+        If[d2 > 0 && d2 <= $maxD2,
+           couplingJ[Min[typeI,typeJ], Max[typeI,typeJ], d2], 0]]]
 
 
 (* ================================================================
@@ -379,15 +380,38 @@ ValidStateIDs[maxId_Integer] :=
       L++];
     ids]
 
-(* DynamicSymParams: returns the free symbolic parameters for this
-   component.  The per-pair $jPairSym symbols are auto-generated from
-   the particle types present; the user's $fieldFreeParams and
-   $couplingFreeParams supply any additional free parameters. *)
+(* DynamicSymParams: returns two sets of parameters.
+   "couplings" — symbolic atoms for the FullSimplify-based checker:
+     fieldF[x,y,L] for every site on this component's lattice, and
+     couplingJ[a,b,d2] for every active type pair (a < b) and bond
+     distance d2 ∈ {1,...,$maxD2}.  Because fieldF and couplingJ have
+     no DownValues these remain as independent unevaluated atoms — each
+     treated as a distinct free real by FullSimplify.
+   "numericParams" — scalar symbols for the numerical MCMC Block:
+     the $jPairSym coupling symbols plus the parameters that appear in
+     $fieldFConcrete and $couplingJConcrete ($concreteParams keys).
+     These are assignable symbols that the Block mechanism can bind to
+     numeric values. *)
 DynamicSymParams[states_List] :=
-  Module[{types = Sort[DeleteCases[Union @@ states, 0]], jPairSyms},
+  Module[{types, L, fieldAtoms, couplingAtoms, jPairSyms, concreteKeys},
+    types = Sort[DeleteCases[Union @@ states, 0]];
+    (* All states in a connected component share the same lattice size *)
+    L = Round[Sqrt[Length[states[[1]]]]];
+    (* Independent field atoms: one per lattice site *)
+    fieldAtoms = Flatten @ Table[
+      fieldF[x, y, L],
+      {x, 0, L - 1}, {y, 0, L - 1}];
+    (* Independent coupling atoms: one per canonical pair (a<b) per d2 *)
+    couplingAtoms = Flatten @ Table[
+      If[a < b, Table[couplingJ[a, b, d2], {d2, 1, $maxD2}], Nothing],
+      {a, types}, {b, types}];
+    (* $jPairSym symbols needed by $couplingJConcrete *)
     jPairSyms = Flatten @ Table[
       If[a < b, {$jPairSym[a, b]}, Nothing],
       {a, types}, {b, types}];
-    <|"couplings" -> Join[$fieldFreeParams, $couplingFreeParams, jPairSyms]|>]
+    (* Parameters used by the concrete implementations *)
+    concreteKeys = If[AssociationQ[$concreteParams], Keys[$concreteParams], {}];
+    <|"couplings"     -> Join[fieldAtoms, couplingAtoms],
+      "numericParams" -> Join[jPairSyms, concreteKeys]|>]
 
 numBeta = 1

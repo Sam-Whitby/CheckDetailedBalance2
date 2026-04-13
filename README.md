@@ -92,24 +92,34 @@ where `dE = energy[newState] - energy[state]` and `MetropolisProb[dE]` is interc
 
 ### Defining field and coupling functions (`vmmc_2d_field.wl` style)
 
-For models with a field and distance-dependent coupling, define two functions in your `.wl` file:
+`vmmc_2d_field.wl` supports user-defined external field and pair coupling functions. The design separates two modes:
+
+**Symbolic check (default):** `fieldF` and `couplingJ` have **no DownValues**. Every site-value `fieldF[x,y,L]` and every pair-value `couplingJ[a,b,d2]` is treated as an independent free real atom by FullSimplify. This proves detailed balance for *all possible* field and coupling functions simultaneously, not just the specific forms you supply.
+
+**Numerical MCMC / animation:** The concrete implementations (`$fieldFConcrete`, `$couplingJConcrete`) are activated inside a `Block`, with the parameters in `$concreteParams` assigned random values (or values you pass on the command line).
+
+To customise the model, edit **Section 0 only** in `vmmc_2d_field.wl`:
 
 ```mathematica
-(* Field energy at 0-indexed lattice position (x, y) on an L×L grid *)
-fieldF[x_Integer, y_Integer, L_Integer] := fieldAmp * Sin[Pi * (x+1) / L]
+(* Concrete field — used for numerical runs and animation only *)
+$fieldFConcrete[x_Integer, y_Integer, L_Integer] :=
+  fieldAmp * Sin[Pi * (x + 1) / L]
 
-(* Pair coupling between types a,b at squared distance d2.
-   MUST be symmetric: couplingJ[a,b,d2] = couplingJ[b,a,d2].
-   Use $jPairSym[a,b] for a per-type-pair symbol (symmetric by construction). *)
-couplingJ[a_Integer, b_Integer, d2_Integer] := $jPairSym[a,b] * Exp[-lambdaJ * d2]
+(* Concrete coupling — MUST satisfy $couplingJConcrete[a,b,d2] = $couplingJConcrete[b,a,d2] *)
+$couplingJConcrete[a_Integer, b_Integer, d2_Integer] :=
+  $jPairSym[a, b] * Exp[-lambdaJ * d2]
 
-(* Declare free symbolic parameters (per-pair $jPairSym symbols auto-discovered) *)
-$fieldFreeParams    = {fieldAmp};
-$couplingFreeParams = {lambdaJ};
-$maxD2 = 1;   (* maximum squared distance for bonds; 1 = nearest-neighbour *)
+(* Numeric parameter values for MCMC and animation runs *)
+$concreteParams = <|fieldAmp -> 1.0, lambdaJ -> 0.5|>
+
+(* Maximum squared distance for bonds; 1 = nearest-neighbour only *)
+$maxD2 = 1
+
+(* Required — do not remove *)
+$abstractFunctions = True
 ```
 
-The checker verifies `couplingJ` symmetry before running; an asymmetric coupling immediately implies a DB violation. The `_Integer` patterns ensure pattern matching is always exact (lattice coordinates and distances are always integers).
+The checker verifies `$couplingJConcrete` symmetry before running. The `_Integer` patterns ensure matching is always exact (all coordinates and distances are integers).
 
 ### Other optional definitions
 

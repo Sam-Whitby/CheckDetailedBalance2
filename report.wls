@@ -92,7 +92,10 @@ If[!FileExistsQ[algFile], algFile = scriptDir <> algFile];
 If[!FileExistsQ[algFile],
   Print["ERROR: File not found: ", posArgs[[1]]]; Exit[1]];
 
-ClearAll[Algorithm, energy, BitsToState, numBeta, symParams, DynamicSymParams, DisplayState];
+ClearAll[Algorithm, energy, BitsToState, numBeta, symParams, DynamicSymParams, DisplayState,
+         fieldF, couplingJ,
+         $fieldFConcrete, $couplingJConcrete, $abstractFunctions, $concreteParams,
+         $fieldFreeParams, $couplingFreeParams];
 Print["Loading: ", algFile];
 Get[algFile];
 
@@ -110,7 +113,9 @@ $energy  = energy;
 $numBeta = numBeta;
 
 (* ---- Verify couplingJ symmetry (if defined) ---- *)
-If[Length[DownValues[couplingJ]] > 0,
+(* In abstract-function mode ($abstractFunctions=True), couplingJ has no
+   DownValues; we check $couplingJConcrete instead via a temporary Block. *)
+$checkCouplingSymmetry[] := (
   $coupSymViolations = CheckCouplingSymmetry[{1,2,3,4,5}, {1,2,4,5,8,9,10}];
   If[$coupSymViolations =!= {},
     Print["ERROR: couplingJ is NOT symmetric — detailed balance cannot hold."];
@@ -119,7 +124,14 @@ If[Length[DownValues[couplingJ]] > 0,
           "  d2=", $coupSymViolations[[1]]["d2"],
           "  J[a,b]-J[b,a] = ", $coupSymViolations[[1]]["asymmetry"]];
     Exit[1]];
-  Print["couplingJ symmetry: PASS"]];
+  Print["couplingJ symmetry: PASS"]);
+Which[
+  Length[DownValues[couplingJ]] > 0,
+    $checkCouplingSymmetry[],
+  Length[DownValues[$couplingJConcrete]] > 0,
+    Block[{couplingJ},
+      couplingJ[a_Integer, b_Integer, d2_Integer] := $couplingJConcrete[a, b, d2];
+      $checkCouplingSymmetry[]]];
 
 (* ---- Map bit string to seed state ---- *)
 state = Check[BitsToState[bitString], $Failed];
@@ -161,10 +173,13 @@ $fixedSymVars = Keys[$fixedParams];
 $fixedNumVals = Values[$fixedParams];
 
 If[$hasDynParams,
-  dynP    = DynamicSymParams[allStates];
-  dynVars = Join[Lookup[dynP, "eps", {}], Lookup[dynP, "couplings", {}]];
-  compSymVars = Union[$staticSymVars, dynVars],
-  compSymVars = $staticSymVars];
+  dynP          = DynamicSymParams[allStates];
+  dynVars       = Join[Lookup[dynP, "eps", {}], Lookup[dynP, "couplings", {}]];
+  dynNumVars    = Lookup[dynP, "numericParams", dynVars];
+  compSymVars    = Union[$staticSymVars, dynVars];
+  compNumericVars = Union[$staticSymVars, dynNumVars],
+  compSymVars    = $staticSymVars;
+  compNumericVars = $staticSymVars];
 compSymAssumptions = Map[Element[#, Reals] &, Union[compSymVars, $fixedSymVars]];
 
 (* ---- Symbolic detailed-balance check ---- *)
@@ -193,17 +208,27 @@ If[printMatrix,
 (* ---- Numerical MCMC check (skipped if DoNumerical=False) ---- *)
 If[doNumerical,
   Print["Running numerical MCMC (", nSteps, " steps) ..."];
-  allBlockVars = Union[compSymVars, $fixedSymVars];
+  allBlockVars = Union[compNumericVars, $fixedSymVars];
+  $runNumericalMCMC[] := (
+    mcmcCounts = RunNumericalMCMCAT[allStates, $alg, $numBeta, "NSteps" -> nSteps];
+    bw = BoltzmannWeightsAT[allStates, $energy, $numBeta]);
+  $activateAndRun[] :=
+    If[ValueQ[$abstractFunctions] && TrueQ[$abstractFunctions],
+      Block[{fieldF, couplingJ},
+        If[Length[DownValues[$fieldFConcrete]] > 0,
+          fieldF[x_Integer, y_Integer, L_Integer] := $fieldFConcrete[x, y, L]];
+        If[Length[DownValues[$couplingJConcrete]] > 0,
+          couplingJ[a_Integer, b_Integer, d2_Integer] := $couplingJConcrete[a, b, d2]];
+        $runNumericalMCMC[]],
+      $runNumericalMCMC[]];
   If[allBlockVars =!= {},
     SeedRandom[42];
-    compNumVals = If[compSymVars =!= {}, RandomReal[{-1, 1}, Length[compSymVars]], {}];
+    compNumVals = If[compNumericVars =!= {}, RandomReal[{-1, 1}, Length[compNumericVars]], {}];
     Block[Evaluate[allBlockVars],
-      If[compSymVars =!= {}, MapThread[Set, {compSymVars, compNumVals}]];
+      If[compNumericVars =!= {}, MapThread[Set, {compNumericVars, compNumVals}]];
       If[$fixedSymVars =!= {}, MapThread[Set, {$fixedSymVars, $fixedNumVals}]];
-      mcmcCounts = RunNumericalMCMCAT[allStates, $alg, $numBeta, "NSteps" -> nSteps];
-      bw = BoltzmannWeightsAT[allStates, $energy, $numBeta]],
-    mcmcCounts = RunNumericalMCMCAT[allStates, $alg, $numBeta, "NSteps" -> nSteps];
-    bw = BoltzmannWeightsAT[allStates, $energy, $numBeta]];
+      $activateAndRun[]],
+    $activateAndRun[]];
   simFreq = N[# / Total[mcmcCounts]] & /@ mcmcCounts;
   kl = Total @ Table[
     With[{p = simFreq[s], q = N @ bw[s]},
