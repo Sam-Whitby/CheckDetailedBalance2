@@ -1004,6 +1004,94 @@ CheckDetailedBalance[matrix_Association, allStates_List, symEnergy_,
   violations
 ]
 
+
+(* ----------------------------------------------------------------
+   SubmitDetailedBalanceFSTasks
+   Async companion to CheckDetailedBalance.  Builds the expression
+   list on the main kernel (fast), then dispatches FullSimplify jobs
+   to subkernels as ParallelSubmit tasks, returning immediately so
+   the caller can overlap BFS of the next component with FS evaluation.
+   Returns an opaque record for CollectDetailedBalanceFSTasks.
+   Falls back to synchronous sequential evaluation (with short-circuit
+   on the first violation) when no subkernels are available.
+   ---------------------------------------------------------------- *)
+SubmitDetailedBalanceFSTasks[matrix_Association, allStates_List, symEnergy_,
+                              extraAssumptions_List : {}] := Module[
+  {n = Length[allStates], pairs, exprs, assm, nK, batches, tasks, results},
+
+  pairs = Flatten[Table[{i, j}, {i, 1, n}, {j, i + 1, n}], 1];
+  If[Length[pairs] == 0,
+    Return[<|"async" -> False, "results" -> {}, "pairs" -> {}, "allStates" -> allStates|>]];
+
+  exprs = Map[
+    Function[ij,
+      With[{si = allStates[[ij[[1]]]], sj = allStates[[ij[[2]]]]},
+        With[{tij = Lookup[matrix, Key[{si, sj}], 0],
+              tji = Lookup[matrix, Key[{sj, si}], 0],
+              ei  = symEnergy[si] /. {r_Real :> Rationalize[r]},
+              ej  = symEnergy[sj] /. {r_Real :> Rationalize[r]}},
+          tij * Exp[-\[Beta] * ei] - tji * Exp[-\[Beta] * ej]]]],
+    pairs];
+
+  assm = Join[{\[Beta] > 0}, extraAssumptions];
+  nK   = Length[Kernels[]];
+
+  If[nK > 0,
+    (* Partition into exactly nK batches (one per subkernel) and submit each
+       as a single ParallelSubmit task.  Limiting to nK tasks prevents queue
+       buildup while the main kernel is busy with BFS, since all batches
+       start immediately on their assigned kernels without queuing. *)
+    batches = Partition[exprs, UpTo[Ceiling[Length[exprs] / nK]]];
+    With[{a = assm},
+      tasks = Map[
+        Function[batch,
+          ParallelSubmit[
+            Map[FullSimplify[PiecewiseExpand[#], Assumptions -> a] &, batch]]],
+        batches]];
+    <|"async" -> True,  "tasks" -> tasks,
+      "pairs" -> pairs, "allStates" -> allStates|>,
+
+    (* Synchronous fallback; short-circuit on first violation. *)
+    results = {};
+    Catch[
+      Scan[Function[e,
+        With[{r = FullSimplify[PiecewiseExpand[e], Assumptions -> assm]},
+          AppendTo[results, r];
+          If[r =!= 0, Throw[$dbc$firstViolation]]]],
+        exprs],
+      $dbc$firstViolation];
+    <|"async" -> False, "results" -> results,
+      "pairs" -> pairs, "allStates" -> allStates|>]
+]
+
+
+(* ----------------------------------------------------------------
+   CollectDetailedBalanceFSTasks
+   Given the record from SubmitDetailedBalanceFSTasks, waits for all
+   FullSimplify results (WaitAll) and returns the violation list in
+   the same format as CheckDetailedBalance.
+   Length[results] may be < Length[pairs] when the sync path
+   short-circuited; violations beyond the first are not reported.
+   ---------------------------------------------------------------- *)
+CollectDetailedBalanceFSTasks[taskData_Association] := Module[
+  {pairs, allStates, results, violations},
+  pairs     = taskData["pairs"];
+  allStates = taskData["allStates"];
+  If[Length[pairs] == 0, Return[{}]];
+  results = If[taskData["async"],
+    Flatten[WaitAll[taskData["tasks"]], 1],
+    taskData["results"]];
+  violations = {};
+  Do[
+    If[results[[k]] =!= 0,
+      AppendTo[violations,
+        <|"pair"     -> {allStates[[pairs[[k, 1]]]], allStates[[pairs[[k, 2]]]]},
+          "residual" -> results[[k]]|>]],
+    {k, Length[results]}];
+  violations
+]
+
+
 (* ----------------------------------------------------------------
    RunNumericalMCMC
    Run numAlg with true random bits; sample outcomes weighted by

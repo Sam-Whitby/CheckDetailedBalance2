@@ -246,6 +246,33 @@ symPassCount  = 0; symFailCount  = 0;
 numPassCount  = 0; numFailCount  = 0;
 $loopIdx     = 0;
 
+(* ---- BFS / FS pipeline state ----
+   After each component's BFS, FS tasks are submitted to subkernels
+   asynchronously.  The next component's BFS then runs on the main
+   kernel while FS evaluates in parallel.  flushPending[] collects
+   the FS result (WaitAll) and prints it, called right after the
+   following component's BFS so FS has had BFS-time to evaluate. *)
+$fsPending = None;   (* record from SubmitDetailedBalanceFSTasks, or None *)
+$fsMeta    = None;   (* print metadata for the pending component *)
+
+flushPending[] := Module[{violations, symResult, failStr},
+  If[$fsPending =!= None,
+    violations = CollectDetailedBalanceFSTasks[$fsPending];
+    symResult  = If[violations === {}, "PASS", "FAIL"];
+    failStr    = If[violations === {}, "0", ToString[Length[violations]]];
+    If[symResult === "PASS", symPassCount++, symFailCount++];
+    clearProgress[];
+    Print[StringPadRight[$fsMeta["bitsStr"],           colBits],
+          StringPadRight[$fsMeta["stateStr"],          colState],
+          StringPadRight[ToString[$fsMeta["nStates"]], colN],
+          If[mode =!= "Numerical",
+             StringPadRight[symResult, colSym] <> StringPadRight[failStr, colFail], ""],
+          If[mode =!= "Symbolic",
+             StringPadRight[$fsMeta["klStr"],     colKL] <>
+             StringPadRight[$fsMeta["numResult"], colNum], ""]];
+    $fsPending = None;
+    $fsMeta    = None]];
+
 Do[
   $loopIdx++;
   state = Check[BitsToState[bitString], $Failed];
@@ -263,6 +290,10 @@ Do[
                "MaxBitDepth" -> maxBitDepth,
                "TimeLimit"   -> 120.,
                "Verbose"     -> verbose];
+
+  (* Collect and print the PREVIOUS component's FS result now that BFS
+     is complete — FS has had BFS-time to evaluate before WaitAll blocks. *)
+  flushPending[];
 
   If[MatchQ[treeData, $dbc$cantHandle[_]],
     clearProgress[];
@@ -300,15 +331,12 @@ Do[
   (* Fixed params are real for FullSimplify purposes (e.g. jumpSigma ∈ Reals) *)
   compSymAssumptions = Map[Element[#, Reals] &, Union[compSymVars, $fixedSymVars]];
 
-  (* ---- Symbolic detailed-balance check ---- *)
-  symResult = "-"; failStr = "-";
-  If[mode =!= "Numerical",
-    violations = CheckDetailedBalance[matrix, allStates, $energy, compSymAssumptions];
-    symResult  = If[violations === {}, "PASS", "FAIL"];
-    failStr    = If[violations === {}, "0", ToString[Length[violations]]];
-    If[symResult === "PASS", symPassCount++, symFailCount++]];
+  (* ---- Submit FS asynchronously; MCMC runs while subkernels evaluate ---- *)
+  $fsPending = If[mode =!= "Numerical",
+    SubmitDetailedBalanceFSTasks[matrix, allStates, $energy, compSymAssumptions],
+    None];
 
-  (* ---- Numerical MCMC check ---- *)
+  (* ---- Numerical MCMC check (overlaps with async FS on subkernels) ---- *)
   klStr = "-"; numResult = "-";
   If[mode =!= "Symbolic" && nStates > 1,
     (* compNumericVars contains the scalar symbols that need numeric values:
@@ -350,18 +378,27 @@ Do[
     numResult = If[kl < 0.02, "PASS", "FAIL"];
     If[numResult === "PASS", numPassCount++, numFailCount++]];
 
-  (* ---- Print result row (clear progress bar first) ---- *)
-  clearProgress[];
-  Print[StringPadRight[bitsStr,           colBits],
-        StringPadRight[stateStr,          colState],
-        StringPadRight[ToString[nStates], colN],
-        If[mode =!= "Numerical",
-           StringPadRight[symResult, colSym] <> StringPadRight[failStr, colFail], ""],
-        If[mode =!= "Symbolic",
-           StringPadRight[klStr, colKL] <> StringPadRight[numResult, colNum], ""]];
+  (* ---- Store metadata for deferred printing by flushPending[] ---- *)
+  $fsMeta = <|"bitsStr"  -> bitsStr,  "stateStr" -> stateStr,
+               "nStates"  -> nStates,
+               "klStr"    -> klStr,   "numResult" -> numResult|>;
+
+  (* Numerical-only mode: no FS submitted, print result row immediately *)
+  If[$fsPending === None,
+    clearProgress[];
+    Print[StringPadRight[bitsStr,           colBits],
+          StringPadRight[stateStr,          colState],
+          StringPadRight[ToString[nStates], colN],
+          If[mode =!= "Symbolic",
+             StringPadRight[klStr, colKL] <> StringPadRight[numResult, colNum], ""]];
+    $fsMeta = None];
+
   writeProgress[$loopIdx],
 
   {bitString, allBitStrings}];
+
+(* Collect and print the last component's deferred FS result *)
+flushPending[];
 
 (* Final newline to clear progress bar before the summary *)
 WriteString[$Output, "\n"];
