@@ -35,12 +35,15 @@
 scriptDir = DirectoryName[$InputFileName];
 Get[scriptDir <> "dbc_core.wl"];
 
-(* ---- Launch parallel kernels for FullSimplify parallelisation ---- *)
+(* ---- Launch parallel kernels ---- *)
 $nKernels = 0;
 Quiet[Check[LaunchKernels[]; $nKernels = Length[Kernels[]], $nKernels = 0]];
 If[$nKernels > 0,
   Print["Parallel: ", $nKernels, " kernels launched."],
   Print["Note: parallel kernel launch failed — running single-threaded."]];
+
+(* Distribute fast-checker helpers to subkernels (no-op if no kernels) *)
+If[$nKernels > 0, $dbcDistributeFastChecker[]];
 
 (* ---- Parse command-line arguments ---- *)
 args = $ScriptCommandLine;
@@ -73,13 +76,15 @@ mode         = "Both";
 nSteps       = 50000;
 maxBitDepth  = 20;
 verbose      = False;
+fastChecker  = False;   (* FastChecker=1: use Exp-polynomial fast path *)
 
 Do[
   If[StringMatchQ[opt, "MaxBitString=" ~~ __], maxBitString = StringDrop[opt, 13]];
   If[StringMatchQ[opt, "Mode="         ~~ __], mode         =              StringDrop[opt,  5]];
   If[StringMatchQ[opt, "NSteps="       ~~ __], nSteps       = ToExpression[StringDrop[opt,  7]]];
   If[StringMatchQ[opt, "MaxBitDepth="  ~~ __], maxBitDepth  = ToExpression[StringDrop[opt, 12]]];
-  If[StringMatchQ[opt, "Verbose="      ~~ __], verbose      = ToExpression[StringDrop[opt,  8]]],
+  If[StringMatchQ[opt, "Verbose="      ~~ __], verbose      = ToExpression[StringDrop[opt,  8]]];
+  If[StringMatchQ[opt, "FastChecker="  ~~ __], fastChecker  = (StringDrop[opt, 12] =!= "0")],
   {opt, kvArgs}];
 
 (* ---- Validate MaxBitString ---- *)
@@ -190,6 +195,10 @@ Print["MaxBitString:  ", maxBitString,
 Print["Mode:          ", mode];
 If[mode =!= "Symbolic", Print["NSteps:        ", nSteps]];
 Print["MaxBitDepth:   ", maxBitDepth];
+If[fastChecker && mode =!= "Numerical",
+  Print["SymChecker:    FastChecker (Exp-polynomial; FullSimplify fallback)"],
+  If[mode =!= "Numerical",
+    Print["SymChecker:    FullSimplify (standard)"]]];
 Print[StringRepeat["=", totalCols]];
 Print[];
 
@@ -331,10 +340,21 @@ Do[
   (* Fixed params are real for FullSimplify purposes (e.g. jumpSigma ∈ Reals) *)
   compSymAssumptions = Map[Element[#, Reals] &, Union[compSymVars, $fixedSymVars]];
 
-  (* ---- Submit FS asynchronously; MCMC runs while subkernels evaluate ---- *)
-  $fsPending = If[mode =!= "Numerical",
-    SubmitDetailedBalanceFSTasks[matrix, allStates, $energy, compSymAssumptions],
-    None];
+  (* ---- Symbolic check ---- *)
+  (* FastChecker=1: synchronous Exp-polynomial check (fast path + FS fallback).
+     Default: async Submit/Collect pipeline using FullSimplify on subkernels. *)
+  symResult = "-"; failStr = "-";
+  If[fastChecker && mode =!= "Numerical",
+    (* Synchronous fast check — result available immediately *)
+    With[{viol = CheckDetailedBalanceFast[matrix, allStates, $energy, compSymAssumptions]},
+      symResult = If[viol === {}, "PASS", "FAIL"];
+      failStr   = If[viol === {}, "0",    ToString[Length[viol]]];
+      If[symResult === "PASS", symPassCount++, symFailCount++]];
+    $fsPending = None,
+    (* Async FS pipeline: submit now, collect after next BFS *)
+    $fsPending = If[mode =!= "Numerical",
+      SubmitDetailedBalanceFSTasks[matrix, allStates, $energy, compSymAssumptions],
+      None]];
 
   (* ---- Numerical MCMC check (overlaps with async FS on subkernels) ---- *)
   klStr = "-"; numResult = "-";
@@ -378,20 +398,23 @@ Do[
     numResult = If[kl < 0.02, "PASS", "FAIL"];
     If[numResult === "PASS", numPassCount++, numFailCount++]];
 
-  (* ---- Store metadata for deferred printing by flushPending[] ---- *)
-  $fsMeta = <|"bitsStr"  -> bitsStr,  "stateStr" -> stateStr,
-               "nStates"  -> nStates,
-               "klStr"    -> klStr,   "numResult" -> numResult|>;
-
-  (* Numerical-only mode: no FS submitted, print result row immediately *)
-  If[$fsPending === None,
+  (* ---- Print result row ---- *)
+  (* Fast checker or Numerical-only: result available now, print immediately.
+     Pipeline mode: defer printing until flushPending[] after next BFS. *)
+  If[fastChecker || $fsPending === None,
     clearProgress[];
     Print[StringPadRight[bitsStr,           colBits],
           StringPadRight[stateStr,          colState],
           StringPadRight[ToString[nStates], colN],
+          If[mode =!= "Numerical",
+             StringPadRight[symResult, colSym] <> StringPadRight[failStr, colFail], ""],
           If[mode =!= "Symbolic",
              StringPadRight[klStr, colKL] <> StringPadRight[numResult, colNum], ""]];
-    $fsMeta = None];
+    $fsMeta = None,
+    (* Pipeline mode: store metadata for deferred printing *)
+    $fsMeta = <|"bitsStr"  -> bitsStr,  "stateStr" -> stateStr,
+                "nStates"  -> nStates,
+                "klStr"    -> klStr,    "numResult" -> numResult|>];
 
   writeProgress[$loopIdx],
 

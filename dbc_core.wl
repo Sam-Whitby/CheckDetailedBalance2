@@ -959,6 +959,231 @@ CheckCouplingSymmetry[typesToCheck_List, d2Values_List] :=
     violations]
 
 
+(* ================================================================
+   FAST EXP-POLYNOMIAL DETAILED BALANCE CHECKER
+   ================================================================
+   Alternative to FullSimplify.  For Boltzmann algorithms the DB
+   expression, after PiecewiseExpand, reduces within each feasible
+   case to a sum of terms  c·Exp[-β·L(params)]  where L is a
+   polynomial in coupling constants and c is a rational constant.
+   Detailed balance holds iff all coefficient sums vanish — a pure
+   algebraic check requiring no FullSimplify.
+
+   Falls back to FullSimplify per-expression whenever the structure
+   deviates from this pattern.  Never approximates or guesses.
+
+   Toggle in check.wls with FastChecker=1.
+   ================================================================ *)
+
+(* Sentinel: signals that fast check cannot determine zero-ness *)
+$dbcFS = Symbol["$dbcFallbackSentinel"];
+
+(* ---- Extract {value, condition} pairs from PiecewiseExpand output ---- *)
+(* Match on head _Piecewise to avoid triggering argument-validation warnings *)
+$dbcPWCases[pw_Piecewise] := Module[{cases, default},
+  cases   = pw[[1]];
+  default = If[Length[pw] >= 2, pw[[2]], 0];
+  Append[cases, {default, True}]]
+$dbcPWCases[other_] := {{other, True}}
+
+(* ---- Feasibility: can the case condition hold given β>0, free params?
+        Returns True, False, or $dbcFS (timed out / undecidable).       ---- *)
+$dbcFeasible[True,  _] := True
+$dbcFeasible[False, _] := False
+$dbcFeasible[cond_,  symParams_List] := Module[{res},
+  res = Quiet @ TimeConstrained[
+    Reduce[cond && \[Beta] > 0, Append[symParams, \[Beta]], Reals],
+    0.5, $dbcFS];
+  Which[res === False, False,
+        res === $dbcFS, $dbcFS,
+        True, True]]
+
+(* ---- Normalise and merge Exp factors ---- *)
+(* Converts (E^a)^n → E^(n·a), then merges products E^a·E^b → E^(a+b),
+   distributing over Plus via Expand so that e.g.
+   (1 - E^a)/E^a  → E^(-a) - 1  before grouping. *)
+$dbcMergeExp[expr_] := FixedPoint[Function[e,
+  e
+  (* (E^a)^n → E^(n·a) *)
+  /. {Power[E^x_, n_]   :> E^Expand[n*x],
+      Power[Exp[x_], n_] :> Exp[Expand[n*x]]}
+  (* expand products/quotients over sums so Exp factors can be merged *)
+  // Expand
+  (* merge adjacent Exp factors *)
+  /. {Times[a___, E^x_,   E^y_,   b___] :> Times[a, E^Expand[x+y],   b],
+      Times[a___, Exp[x_], Exp[y_], b___] :> Times[a, Exp[Expand[x+y]], b]}],
+  expr, 30]
+
+(* ---- Split one expanded term into {coefficient, exponentPoly}
+        where term = coefficient · Exp[exponentPoly].
+        Returns $dbcFS if structure is unexpected.                       ---- *)
+$dbcSplitTerm[0]   := {0, 0}
+$dbcSplitTerm[0.]  := {0, 0}
+$dbcSplitTerm[t_]  := Module[{ep},
+  ep = Cases[{t}, Exp[x_] :> x, {0, Infinity}];
+  Which[
+    Length[ep] == 0, {t, 0},
+    Length[ep] == 1, {Expand[Cancel[t / Exp[ep[[1]]]]], Expand[ep[[1]]]},
+    True, $dbcFS]]
+
+(* ---- Group split-term list by exponent polynomial (exact comparison).
+        Returns list of {exponentPoly, {coeff1, coeff2, ...}}.          ---- *)
+$dbcGroupByExp[splits_List] := Module[
+  {polys = {}, groups = {}, matched},
+  Scan[Function[s,
+    matched = SelectFirst[Range @ Length[polys],
+      Function[i, Expand[s[[2]] - polys[[i]]] === 0], 0];
+    If[matched === 0,
+      AppendTo[polys,  s[[2]]];
+      AppendTo[groups, {s[[1]]}],
+      groups[[matched]] = Append[groups[[matched]], s[[1]]]]],
+    splits];
+  MapThread[{#1, #2} &, {polys, groups}]]
+
+(* ---- Check whether an expression is identically zero by treating
+        each Exp[poly] as an independent basis element.
+        Returns True, False, or $dbcFS.                                  ---- *)
+$dbcIsExpZero[0]   := True
+$dbcIsExpZero[0.]  := True
+$dbcIsExpZero[expr_] := Module[
+  {merged, expanded, terms, splits, grouped},
+  merged   = $dbcMergeExp[expr];
+  expanded = Expand[merged];
+  If[expanded === 0, Return[True]];
+  terms  = If[Head[expanded] === Plus, List @@ expanded, {expanded}];
+  splits = Map[$dbcSplitTerm, terms];
+  If[MemberQ[splits, $dbcFS], Return[$dbcFS]];
+  grouped = $dbcGroupByExp[splits];
+  If[AllTrue[grouped, Function[g, Expand[Total[g[[2]]]] === 0]],
+    True, False]]
+
+(* ---- Substitute equality constraints from a condition into an expression.
+        E.g. cond = (Jpair12 == 0) && (x > 0)  →  val /. {Jpair12 -> 0}  ---- *)
+$dbcSubstEqualities[val_, True]  := val
+$dbcSubstEqualities[val_, False] := val
+$dbcSubstEqualities[val_, cond_] := Module[
+  {eqs, rules, solns},
+  eqs = Cases[{cond}, HoldPattern[lhs_ == rhs_], Infinity];
+  If[eqs === {}, Return[val]];
+  (* Solve each equality for a symbolic param and substitute *)
+  rules = Flatten @ Map[
+    Function[eq,
+      Quiet @ Check[Solve[eq, {}], {}]],  (* empty var list: Solve returns rules *)
+    eqs];
+  If[rules === {}, val /. Map[(#[[1]] -> #[[2]]) &, eqs],
+     val /. rules]]
+
+(* ---- Fast check for one DB expression.
+        Returns True (zero), False (non-zero), or $dbcFS (fall back).   ---- *)
+$dbcCheckOneExpr[expr_, assm_List, symParams_List] := Module[
+  {pw, cases},
+  pw    = PiecewiseExpand[expr, assm];
+  cases = $dbcPWCases[pw];
+  Catch[
+    Scan[Function[vc,
+      With[{val = vc[[1]], cond = vc[[2]]},
+        With[{feas = $dbcFeasible[cond, symParams]},
+          If[feas === False,   Return[]];          (* infeasible case: skip *)
+          If[feas === $dbcFS,  Throw[$dbcFS]];     (* can't decide: fall back *)
+          (* Substitute any equality constraints before the exponent check.
+             E.g. cond = (Jpair12 == 0) → substitute Jpair12→0 into val. *)
+          With[{val2 = $dbcSubstEqualities[val, cond]},
+            With[{z = $dbcIsExpZero[val2]},
+              Which[z === True,    Return[],          (* zero: continue *)
+                    z === $dbcFS,  Throw[$dbcFS],     (* can't decide: fall back *)
+                    True,          Throw[False]]]]]]],  (* non-zero found *)
+      cases];
+    True]]  (* every feasible case was zero *)
+
+(* ================================================================
+   CheckDetailedBalanceFast
+   Drop-in replacement for CheckDetailedBalance.
+   Uses Exp-coefficient matching; falls back to FullSimplify
+   per-expression only when needed.  Never approximates.
+   Same argument signature and return format as CheckDetailedBalance.
+
+   Parallelises using ParallelMap when subkernels are available:
+   expressions are built on the main kernel, then each pair's
+   fast check runs on a subkernel.  Requires the helper functions
+   ($dbcCheckOneExpr etc.) to be distributed first via
+   $dbcDistributeFastChecker[].
+   ================================================================ *)
+
+(* Distribute all fast-checker helpers to subkernels.
+   Called once from check.wls after LaunchKernels[].           *)
+$dbcDistributeFastChecker[] := (
+  DistributeDefinitions[
+    $dbcFS,
+    $dbcPWCases,
+    $dbcFeasible,
+    $dbcMergeExp,
+    $dbcSplitTerm,
+    $dbcGroupByExp,
+    $dbcIsExpZero,
+    $dbcSubstEqualities,
+    $dbcCheckOneExpr])
+
+(* Worker: evaluate one (expr, assm, symParams) triple.
+   Returns {fastResult, expr, assm} so the caller can fall back if needed. *)
+$dbcFastWorker[expr_, assm_, symParams_] :=
+  {$dbcCheckOneExpr[expr, assm, symParams], expr, assm}
+
+CheckDetailedBalanceFast[matrix_Association, allStates_List, symEnergy_,
+                         extraAssumptions_List : {}] := Module[
+  {n, pairs, assm, symParams, exprs, pairData, results, violations,
+   si, sj, tij, tji, ei, ej, fRes, fsRes},
+
+  n         = Length[allStates];
+  pairs     = Flatten[Table[{i, j}, {i, 1, n}, {j, i+1, n}], 1];
+  If[Length[pairs] == 0, Return[{}]];
+
+  assm      = Join[{\[Beta] > 0}, extraAssumptions];
+  symParams = Cases[extraAssumptions, Element[x_, Reals] :> x, Infinity];
+
+  (* Build all expressions on main kernel — symEnergy may not be on subkernels *)
+  exprs = Map[
+    Function[pair,
+      si  = allStates[[pair[[1]]]]; sj = allStates[[pair[[2]]]];
+      tij = Lookup[matrix, Key[{si, sj}], 0];
+      tji = Lookup[matrix, Key[{sj, si}], 0];
+      ei  = symEnergy[si] /. r_Real :> Rationalize[r];
+      ej  = symEnergy[sj] /. r_Real :> Rationalize[r];
+      tij * Exp[-\[Beta] * ei] - tji * Exp[-\[Beta] * ej]],
+    pairs];
+
+  (* Parallelize: embed assm and symParams by value via With[] *)
+  With[{a = assm, sp = symParams},
+    results = If[Length[Kernels[]] > 0,
+      ParallelMap[$dbcFastWorker[#, a, sp] &, exprs],
+      Map[       $dbcFastWorker[#, a, sp] &, exprs]]];
+
+  (* Collect violations; fall back to FullSimplify for undecided cases *)
+  violations = {};
+  Do[
+    With[{fRes  = results[[k, 1]],
+          expr2 = results[[k, 2]],
+          pair  = pairs[[k]]},
+      Which[
+        fRes === True,
+          Null,     (* fast path confirmed zero *)
+        fRes === False,
+          (* Confirm with FullSimplify for canonical residual *)
+          fsRes = FullSimplify[PiecewiseExpand[expr2], Assumptions -> assm];
+          If[fsRes =!= 0,
+            AppendTo[violations,
+              <|"pair"     -> {allStates[[pair[[1]]]], allStates[[pair[[2]]]]},
+                "residual" -> fsRes|>]],
+        True,     (* $dbcFS: fast path inconclusive, fall back *)
+          fsRes = FullSimplify[PiecewiseExpand[expr2], Assumptions -> assm];
+          If[fsRes =!= 0,
+            AppendTo[violations,
+              <|"pair"     -> {allStates[[pair[[1]]]], allStates[[pair[[2]]]]},
+                "residual" -> fsRes|>]]]],
+    {k, Length[pairs]}];
+
+  violations
+]
+
 (* ----------------------------------------------------------------
    CheckDetailedBalance
    Verifies T(i->j)*pi(i) = T(j->i)*pi(j) for all i<j pairs,
