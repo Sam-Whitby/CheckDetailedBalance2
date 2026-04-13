@@ -108,9 +108,10 @@ def draw_coupling_matrix(ax, cbar_ax, matrix: np.ndarray, n_types: int):
     Draw a colour-coded Jpair(a,b) heatmap on *ax* with a colourbar on
     *cbar_ax*.  Diverging RdBu_r colourmap centred at zero.
     """
+    # RdBu: red = negative (repulsive, J<0), white = 0, blue = positive (attractive, J>0)
     vabs = max(float(np.abs(matrix).max()), 1e-10)
     norm = TwoSlopeNorm(vmin=-vabs, vcenter=0.0, vmax=vabs)
-    im = ax.imshow(matrix, cmap="RdBu_r", norm=norm, aspect="equal",
+    im = ax.imshow(matrix, cmap="RdBu", norm=norm, aspect="equal",
                    interpolation="nearest")
 
     ticks  = list(range(n_types))
@@ -119,16 +120,7 @@ def draw_coupling_matrix(ax, cbar_ax, matrix: np.ndarray, n_types: int):
     ax.set_yticks(ticks);  ax.set_yticklabels(labels, fontsize=8)
     ax.set_xlabel("Type b", fontsize=8)
     ax.set_ylabel("Type a", fontsize=8)
-    ax.set_title("Jpair(a, b)", fontsize=9, pad=4)
-
-    # Annotate each cell with its numeric value
-    ann_fs = max(5, 9 - n_types)   # shrink font for larger matrices
-    for i in range(n_types):
-        for j in range(n_types):
-            v = matrix[i, j]
-            color = "white" if abs(v) > 0.55 * vabs else "black"
-            ax.text(j, i, f"{v:.2f}", ha="center", va="center",
-                    fontsize=ann_fs, color=color)
+    ax.set_title("Jpair(a,b)  blue=attractive  red=repulsive", fontsize=8, pad=4)
 
     cbar = plt.colorbar(im, cax=cbar_ax)
     cbar.ax.tick_params(labelsize=7)
@@ -354,9 +346,12 @@ def main():
         fig, update, frames=n_frames,
         interval=delay_ms, blit=simple, repeat=False)
 
-    # Stop the animation timer when the window is closed to prevent the
-    # "RuntimeError: dictionary changed size during iteration" in the
-    # matplotlib timer callbacks list.
+    # Stop the animation timer when the window is closed.  Without this the
+    # timer fires into a partially-torn-down Tcl/Tk runtime on macOS, causing
+    # a SIGSEGV in mach_vm_allocate_kernel that surfaces as a macOS Problem
+    # Report.  After plt.show() returns we call sys.exit(0) explicitly so
+    # Python skips its normal atexit / GC sweep of matplotlib GUI objects,
+    # which is the other common trigger for the same crash.
     def on_close(_event):
         try:
             ani.event_source.stop()
@@ -369,6 +364,8 @@ def main():
         plt.show()
     except Exception:
         pass
+
+    sys.exit(0)
 
 
 if __name__ == "__main__":
