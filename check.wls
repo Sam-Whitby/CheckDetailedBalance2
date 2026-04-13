@@ -225,7 +225,7 @@ formatDuration[secs_] :=
         True,        ToString[Floor[secs/3600]] <> "h " <>
                      ToString[Floor[Mod[secs/60, 60]]] <> "m"];
 
-writeProgress[idx_] := Module[{elapsed, pct, filled, arrow, bar, eta, etaStr, elStr},
+writeProgress[idx_] := If[verbose, Module[{elapsed, pct, filled, arrow, bar, eta, etaStr, elStr},
   elapsed = AbsoluteTime[] - $checkStart;
   pct     = If[$nBitStrings > 0, idx / $nBitStrings, 0.];
   filled  = Round[pct * $barWidth];
@@ -240,11 +240,10 @@ writeProgress[idx_] := Module[{elapsed, pct, filled, arrow, bar, eta, etaStr, el
   WriteString[$Output,
     "\r" <> bar <> " " <> ToString[idx] <> "/" <> ToString[$nBitStrings] <>
     "  " <> ToString[Round[pct * 100]] <> "%  elapsed: " <> elStr <>
-    "  ETA: " <> etaStr <> "   "]  (* trailing spaces clear previous longer text *)
-];
+    "  ETA: " <> etaStr <> "   "]]];  (* trailing spaces clear previous longer text *)
 
 (* Before printing a permanent row: clear the progress line first *)
-clearProgress[] := WriteString[$Output, "\r" <> StringRepeat[" ", 78] <> "\r"];
+clearProgress[] := If[verbose, WriteString[$Output, "\r" <> StringRepeat[" ", 78] <> "\r"]];
 
 (* ================================================================
    Main loop
@@ -424,7 +423,7 @@ Do[
 flushPending[];
 
 (* Final newline to clear progress bar before the summary *)
-WriteString[$Output, "\n"];
+If[verbose, WriteString[$Output, "\n"]];
 
 (* ================================================================
    Summary
