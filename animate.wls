@@ -40,8 +40,17 @@
        Sites=9 N=3 Steps=400 FPS=15 RecordEvery=2
    ================================================================ *)
 
-(* Real MetropolisProb for actual execution (not BFS interception) *)
-MetropolisProb[dE_] := If[dE <= 0, 1., Exp[-$animBeta * dE]]
+(* Real MetropolisProb for actual execution (not BFS interception).
+   Clamp large positive exponents to avoid underflow warnings. *)
+MetropolisProb[dE_] := If[dE <= 0, 1., If[$animBeta * dE >= 700., 0., Exp[-$animBeta * dE]]]
+
+(* $jPairSym: symmetric coupling symbol Jpair<lo><hi>.
+   Defined here (without loading dbc_core.wl) so that energy[] evaluates
+   numerically during animation runs. *)
+$jPairSym[a_Integer, b_Integer] :=
+  ToExpression["Jpair" <> ToString[Min[a, b]] <> ToString[Max[a, b]]]
+
+Off[General::munfl]
 
 scriptDir = DirectoryName[$InputFileName];
 
@@ -114,6 +123,9 @@ If[Length[DownValues[Algorithm]] == 0,
   Print["ERROR: 'Algorithm' not defined in ", algFile]; Exit[1]];
 
 $animBeta = If[animBeta =!= None, animBeta, numBeta];
+(* Assign \[Beta] (Unicode β) so that VMMC link weights — which use \[Beta]
+   directly in Piecewise expressions — receive the correct numeric value. *)
+\[Beta] = $animBeta;
 
 (* ---- Build initial state ---- *)
 If[nPart > nSites,
@@ -237,5 +249,9 @@ pythonCmd = SelectFirst[{"python3.11", "python3", "python"},
 
 result = RunProcess[{pythonCmd, pyScript, dataFile}];
 If[result["ExitCode"] != 0,
-  Print["Python error:\n", result["StandardError"]];
-  Print["Standard output:\n", result["StandardOutput"]]];
+  (* Only print non-empty streams; a non-zero exit with empty output usually
+     means the user simply closed the animation window. *)
+  If[StringLength[result["StandardError"]] > 0,
+    Print["Python error:\n", result["StandardError"]]];
+  If[StringLength[result["StandardOutput"]] > 0,
+    Print["Standard output:\n", result["StandardOutput"]]]];
