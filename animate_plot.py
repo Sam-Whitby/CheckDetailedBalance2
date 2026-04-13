@@ -64,10 +64,13 @@ def _parse_jpair_key(key: str, n_types: int):
     if not key.startswith("Jpair"):
         return None
     suffix = key[5:]
-    # Try all splits of the suffix digits into two integers 1..n_types
+    # Try all splits of the suffix digits into two integers 1..n_types.
+    # Reject any split where either part has a leading zero, which would
+    # cause ambiguous matches like "1","011" for Jpair1011 (should be 10,11).
     for i in range(1, len(suffix)):
         a_str, b_str = suffix[:i], suffix[i:]
-        if a_str.isdigit() and b_str.isdigit():
+        if (a_str.isdigit() and b_str.isdigit()
+                and not a_str.startswith("0") and not b_str.startswith("0")):
             a, b = int(a_str), int(b_str)
             if 1 <= a <= n_types and 1 <= b <= n_types:
                 return a, b
