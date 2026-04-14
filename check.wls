@@ -30,6 +30,9 @@
      NSteps=N             MCMC steps per seed state (default 50000)
      MaxBitDepth=N        BFS tree depth cap per state (default 20)
      Verbose=True/False   Print per-state BFS progress (default False)
+     SeedBitStrings=X,Y  Comma-separated list of bit strings to test
+                          directly, bypassing MaxBitString enumeration.
+                          BFS from each seed discovers the full component.
    ================================================================ *)
 
 scriptDir = DirectoryName[$InputFileName];
@@ -64,6 +67,7 @@ If[Length[posArgs] < 1,
   Print[""];
   Print["Options (key=value, no spaces around =):"];
   Print["  MaxBitString=XXXX    Largest bit string (default 11111111)"];
+  Print["  SeedBitStrings=X,Y  Comma-separated bit strings to test directly"];
   Print["  Mode=Symbolic|Numerical|Both  (default Both)"];
   Print["  NSteps=N             MCMC steps per system (default 50000)"];
   Print["  MaxBitDepth=N        BFS depth cap (default 20)"];
@@ -71,20 +75,22 @@ If[Length[posArgs] < 1,
   Exit[1]];
 
 (* ---- Option defaults ---- *)
-maxBitString = "11111111";
-mode         = "Both";
-nSteps       = 50000;
-maxBitDepth  = 20;
-verbose      = False;
-fastChecker  = False;   (* FastChecker=1: use Exp-polynomial fast path *)
+maxBitString    = "11111111";
+mode            = "Both";
+nSteps          = 50000;
+maxBitDepth     = 20;
+verbose         = False;
+fastChecker     = False;   (* FastChecker=1: use Exp-polynomial fast path *)
+seedBitStrings  = None;    (* SeedBitStrings=X,Y: test specific bit strings *)
 
 Do[
-  If[StringMatchQ[opt, "MaxBitString=" ~~ __], maxBitString = StringDrop[opt, 13]];
-  If[StringMatchQ[opt, "Mode="         ~~ __], mode         =              StringDrop[opt,  5]];
-  If[StringMatchQ[opt, "NSteps="       ~~ __], nSteps       = ToExpression[StringDrop[opt,  7]]];
-  If[StringMatchQ[opt, "MaxBitDepth="  ~~ __], maxBitDepth  = ToExpression[StringDrop[opt, 12]]];
-  If[StringMatchQ[opt, "Verbose="      ~~ __], verbose      = ToExpression[StringDrop[opt,  8]]];
-  If[StringMatchQ[opt, "FastChecker="  ~~ __], fastChecker  = (StringDrop[opt, 12] =!= "0")],
+  If[StringMatchQ[opt, "MaxBitString="   ~~ __], maxBitString   = StringDrop[opt, 13]];
+  If[StringMatchQ[opt, "SeedBitStrings=" ~~ __], seedBitStrings = StringDrop[opt, 15]];
+  If[StringMatchQ[opt, "Mode="           ~~ __], mode           =              StringDrop[opt,  5]];
+  If[StringMatchQ[opt, "NSteps="         ~~ __], nSteps         = ToExpression[StringDrop[opt,  7]]];
+  If[StringMatchQ[opt, "MaxBitDepth="    ~~ __], maxBitDepth    = ToExpression[StringDrop[opt, 12]]];
+  If[StringMatchQ[opt, "Verbose="        ~~ __], verbose        = ToExpression[StringDrop[opt,  8]]];
+  If[StringMatchQ[opt, "FastChecker="    ~~ __], fastChecker    = (StringDrop[opt, 12] =!= "0")],
   {opt, kvArgs}];
 
 (* ---- Validate MaxBitString ---- *)
@@ -166,20 +172,26 @@ maxBitVec = ToExpression /@ Characters[maxBitString];
 maxLen     = Length[maxBitVec];
 maxVal     = FromDigits[maxBitVec, 2];
 
-(* If the algorithm defines ValidStateIDs[maxId], use it to enumerate only
-   the integer IDs that map to valid states (e.g. perfect-square arrays for
-   the 2D lattice), skipping the bulk of bit strings that BitsToState would
-   immediately reject.  Otherwise fall back to exhaustive enumeration. *)
+(* SeedBitStrings=X,Y overrides MaxBitString enumeration entirely.
+   Each comma-separated token is treated as a literal bit string.
+   BFS from each seed will discover the full component as usual. *)
 allBitStrings =
-  If[Length[DownValues[ValidStateIDs]] > 0,
-    IntegerDigits[#, 2] & /@ ValidStateIDs[maxVal],
-    Join[
-      Flatten[Table[IntegerDigits[i, 2, len],
-                    {len, 1, maxLen - 1}, {i, 0, 2^len - 1}], 1],
-      Table[IntegerDigits[i, 2, maxLen], {i, 0, maxVal}]]];
+  If[seedBitStrings =!= None,
+    (* Parse comma-separated bit strings and convert chars to integers *)
+    Map[ToExpression /@ Characters[#] &, StringSplit[seedBitStrings, ","]],
+    (* Otherwise: enumerate from MaxBitString (with ValidStateIDs if available) *)
+    If[Length[DownValues[ValidStateIDs]] > 0,
+      IntegerDigits[#, 2] & /@ ValidStateIDs[maxVal],
+      Join[
+        Flatten[Table[IntegerDigits[i, 2, len],
+                      {len, 1, maxLen - 1}, {i, 0, 2^len - 1}], 1],
+        Table[IntegerDigits[i, 2, maxLen], {i, 0, maxVal}]]]];
 
 (* ---- Column widths ---- *)
-colBits  = Max[14, StringLength[maxBitString] + 2];
+(* When SeedBitStrings is used, base column width on the longest seed string *)
+colBits  = If[seedBitStrings =!= None,
+  Max[14, Max[StringLength /@ StringSplit[seedBitStrings, ","]] + 2],
+  Max[14, StringLength[maxBitString] + 2]];
 colState = 26; colN = 9; colSym = 10; colFail = 8; colKL = 12; colNum = 10;
 totalCols = colBits + colState + colN +
   If[mode =!= "Numerical", colSym + colFail, 0] +
@@ -190,8 +202,11 @@ Print[];
 Print[StringRepeat["=", totalCols]];
 Print["DETAILED BALANCE CHECKER"];
 Print["File:          ", algFile];
-Print["MaxBitString:  ", maxBitString,
-      "  (", Length[allBitStrings], " bit strings generated)"];
+If[seedBitStrings =!= None,
+  Print["SeedBitStrings: ", seedBitStrings,
+        "  (", Length[allBitStrings], " seed states)"],
+  Print["MaxBitString:  ", maxBitString,
+        "  (", Length[allBitStrings], " bit strings generated)"]];
 Print["Mode:          ", mode];
 If[mode =!= "Symbolic", Print["NSteps:        ", nSteps]];
 Print["MaxBitDepth:   ", maxBitDepth];

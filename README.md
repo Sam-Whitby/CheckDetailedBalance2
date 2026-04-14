@@ -30,6 +30,8 @@ Two symbolic checking methods are available, selectable per run:
 ### Standard checker (default)
 Uses `FullSimplify[PiecewiseExpand[expr], {β > 0, ...}]` for each state pair. Correct for all algorithm types. Slow for complex algorithms (tens of seconds per component).
 
+Both checkers apply **syntactic deduplication**: before dispatching to subkernels, all detailed-balance expressions are hashed. Pairs with identical hash are mapped to the same unique expression; simplification is run only once per unique expression, and results are broadcast back. For periodic lattices this gives a speedup proportional to the number of lattice translations (e.g. 9× for a 3×3 grid with 2 particles, reducing 2556 pairs to ~284 unique expressions).
+
 ### FastChecker (`FastChecker=1`)
 An Exp-polynomial algebraic checker. After `PiecewiseExpand`, detailed balance expressions for Boltzmann algorithms reduce — within each feasible sign case — to sums of terms `c·exp(−β·L)` where c is a rational coefficient and L is a polynomial in coupling constants. Detailed balance holds iff all coefficient sums vanish, which is verified by `Expand[...] === 0` (microseconds).
 
@@ -66,6 +68,7 @@ wolframscript -file check.wls <algorithm.wl> [options]
 | Option | Default | Description |
 |--------|---------|-------------|
 | `MaxBitString=XXXX` | `11111111` | Largest bit string tested |
+| `SeedBitStrings=X,Y` | off | Test specific bit strings only (comma-separated); bypasses `MaxBitString` enumeration. BFS from each seed discovers the full connected component. |
 | `Mode=Symbolic\|Numerical\|Both` | `Both` | Which checks to run |
 | `NSteps=N` | `50000` | MCMC steps for numerical check |
 | `MaxBitDepth=N` | `20` | BFS depth cap per state |
@@ -192,6 +195,11 @@ wolframscript -file check.wls examples3/kawasaki_2d.wl
 # Check VMMC with fast polynomial checker (faster for complex algorithms)
 wolframscript -file check.wls examples3/vmmc_2d_field.wl \
   MaxBitString=1111111111 Mode=Symbolic FastChecker=1
+
+# Target a specific 3×3 state directly (bit string for {1,2,0,...} on a 3×3 grid)
+# Avoids enumerating the ~125k bit strings needed to reach 3×3 states via MaxBitString
+wolframscript -file check.wls examples3/vmmc_2d.wl \
+  SeedBitStrings=11110101011110011 Mode=Symbolic
 
 # Report for a specific seed state
 wolframscript -file report.wls examples3/vmmc_2d.wl BitString=101001 \
