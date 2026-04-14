@@ -1150,9 +1150,11 @@ $dbcFastWorker[expr_, assm_, symParams_] :=
 
 CheckDetailedBalanceFast[matrix_Association, allStates_List, symEnergy_,
                          extraAssumptions_List : {}] := Module[
-  {n, pairs, assm, symParams, exprs, uniqueIdxs, canonIdx, uniqueExprs,
-   uniqueResults, idxToResult, results, violations,
-   si, sj, tij, tji, ei, ej, fRes, fsCache},
+  {n, pairs, assm, symParams, exprs,
+   nonTrivIdx, ntExprs, ntPairs,
+   uniqueIdxs, canonIdx, uniqueExprs, uniqueResults, idxToResult,
+   results, violations, fsCache, nK,
+   si, sj, tij, tji, ei, ej, fRes},
 
   n         = Length[allStates];
   pairs     = Flatten[Table[{i, j}, {i, 1, n}, {j, i+1, n}], 1];
@@ -1172,41 +1174,46 @@ CheckDetailedBalanceFast[matrix_Association, allStates_List, symEnergy_,
       tij * Exp[-\[Beta] * ei] - tji * Exp[-\[Beta] * ej]],
     pairs];
 
-  (* Deduplicate: many pairs share identical DB expressions (e.g. translational
-     equivalents in periodic lattices).  Only check unique expressions. *)
-  {uniqueIdxs, canonIdx} = $dbcDedup[exprs];
-  uniqueExprs = exprs[[uniqueIdxs]];
+  (* A: Drop pairs whose DB expression is syntactically 0 (both tij=tji=0). *)
+  nonTrivIdx = Select[Range[Length[exprs]], exprs[[#]] =!= 0 &];
+  If[Length[nonTrivIdx] == 0, Return[{}]];
+  ntExprs = exprs[[nonTrivIdx]];
+  ntPairs = pairs[[nonTrivIdx]];
 
-  (* Parallelize unique expressions: embed assm and symParams by value via With[] *)
+  (* Dedup: run each unique expression once; broadcast results back. *)
+  {uniqueIdxs, canonIdx} = $dbcDedup[ntExprs];
+  uniqueExprs = ntExprs[[uniqueIdxs]];
+
+  (* B+C: ParallelMap for natural load balancing; sequential when the workload
+          is too small to justify the dispatch overhead. *)
+  nK = Length[Kernels[]];
   With[{a = assm, sp = symParams},
-    uniqueResults = If[Length[Kernels[]] > 0,
+    uniqueResults = If[nK > 0 && Length[uniqueExprs] > nK,
       ParallelMap[$dbcFastWorker[#, a, sp] &, uniqueExprs],
       Map[       $dbcFastWorker[#, a, sp] &, uniqueExprs]]];
 
-  (* Map results back to all pairs via canonIdx *)
   idxToResult = AssociationThread[uniqueIdxs -> uniqueResults];
-  results = Map[Function[k, idxToResult[canonIdx[[k]]]], Range[Length[exprs]]];
+  results = Map[Function[k, idxToResult[canonIdx[[k]]]], Range[Length[ntExprs]]];
 
-  (* Collect violations; fall back to FullSimplify for undecided cases.
-     fsCache avoids rerunning FullSimplify for duplicate expressions. *)
+  (* Collect violations; fall back to FullSimplify once per unique expression. *)
   fsCache    = <||>;
   violations = {};
   Do[
     With[{fRes = results[[k, 1]],
-          pair = pairs[[k]],
+          pair = ntPairs[[k]],
           cidx = canonIdx[[k]]},
       Which[
         fRes === True,
-          Null,     (* fast path confirmed zero *)
-        True,       (* False or $dbcFS: fall back to FullSimplify once per unique expr *)
+          Null,
+        True,
           If[!KeyExistsQ[fsCache, cidx],
             fsCache[cidx] = FullSimplify[
-              PiecewiseExpand[exprs[[cidx]]], Assumptions -> assm]];
+              PiecewiseExpand[ntExprs[[cidx]]], Assumptions -> assm]];
           If[fsCache[cidx] =!= 0,
             AppendTo[violations,
               <|"pair"     -> {allStates[[pair[[1]]]], allStates[[pair[[2]]]]},
                 "residual" -> fsCache[cidx]|>]]]],
-    {k, Length[pairs]}];
+    {k, Length[ntExprs]}];
 
   violations
 ]
@@ -1221,15 +1228,15 @@ CheckDetailedBalanceFast[matrix_Association, allStates_List, symEnergy_,
 CheckDetailedBalance[matrix_Association, allStates_List, symEnergy_,
                      extraAssumptions_List : {}] := Module[
   {n = Length[allStates], pairs, exprs,
+   nonTrivIdx, ntExprs, ntPairs,
    uniqueIdxs, canonIdx, uniqueExprs, uniqueResults, idxToResult,
-   results, violations},
+   results, violations, nK},
 
   pairs = Flatten[Table[{i, j}, {i, 1, n}, {j, i + 1, n}], 1];
   If[Length[pairs] == 0, Return[{}]];
 
   (* Build all expressions on the MAIN kernel — symEnergy is only called here.
-     The results are pure symbolic data (no custom function calls) safe to send
-     to remote kernels for FullSimplify. *)
+     The results are pure symbolic data safe to send to remote kernels. *)
   exprs = Map[
     Function[ij,
       With[{si = allStates[[ij[[1]]]], sj = allStates[[ij[[2]]]]},
@@ -1240,130 +1247,34 @@ CheckDetailedBalance[matrix_Association, allStates_List, symEnergy_,
           tij * Exp[-\[Beta] * ei] - tji * Exp[-\[Beta] * ej]]]],
     pairs];
 
-  (* Deduplicate: skip FullSimplify for expressions already seen as zero. *)
-  {uniqueIdxs, canonIdx} = $dbcDedup[exprs];
-  uniqueExprs = exprs[[uniqueIdxs]];
+  (* A: Drop pairs whose DB expression is syntactically 0 (both tij=tji=0). *)
+  nonTrivIdx = Select[Range[Length[exprs]], exprs[[#]] =!= 0 &];
+  If[Length[nonTrivIdx] == 0, Return[{}]];
+  ntExprs = exprs[[nonTrivIdx]];
+  ntPairs = pairs[[nonTrivIdx]];
 
-  (* Use ParallelMap when kernels are available; fall back to sequential Map.
-     The With[] ensures 'assm' is embedded by value before the function is
-     sent to remote kernels (standard Mathematica parallel pattern). *)
+  (* Dedup: run FullSimplify only on unique expressions. *)
+  {uniqueIdxs, canonIdx} = $dbcDedup[ntExprs];
+  uniqueExprs = ntExprs[[uniqueIdxs]];
+
+  (* B+C: ParallelMap for natural per-expression load balancing; sequential
+          when the workload is too small to justify the dispatch overhead. *)
+  nK = Length[Kernels[]];
   With[{assm = Join[{\[Beta] > 0}, extraAssumptions]},
-    uniqueResults = If[Length[Kernels[]] > 0,
+    uniqueResults = If[nK > 0 && Length[uniqueExprs] > nK,
       ParallelMap[FullSimplify[PiecewiseExpand[#], Assumptions -> assm] &, uniqueExprs],
-      Map[    FullSimplify[PiecewiseExpand[#], Assumptions -> assm] &, uniqueExprs]]];
+      Map[        FullSimplify[PiecewiseExpand[#], Assumptions -> assm] &, uniqueExprs]]];
 
-  (* Map unique results back to all pairs *)
   idxToResult = AssociationThread[uniqueIdxs -> uniqueResults];
-  results = Map[Function[k, idxToResult[canonIdx[[k]]]], Range[Length[exprs]]];
+  results = Map[Function[k, idxToResult[canonIdx[[k]]]], Range[Length[ntExprs]]];
 
   violations = {};
   Do[
     If[results[[k]] =!= 0,
       AppendTo[violations,
-        <|"pair"     -> {allStates[[pairs[[k, 1]]]], allStates[[pairs[[k, 2]]]]},
+        <|"pair"     -> {allStates[[ntPairs[[k, 1]]]], allStates[[ntPairs[[k, 2]]]]},
           "residual" -> results[[k]]|>]],
-    {k, Length[pairs]}];
-  violations
-]
-
-
-(* ----------------------------------------------------------------
-   SubmitDetailedBalanceFSTasks
-   Async companion to CheckDetailedBalance.  Builds the expression
-   list on the main kernel (fast), then dispatches FullSimplify jobs
-   to subkernels as ParallelSubmit tasks, returning immediately so
-   the caller can overlap BFS of the next component with FS evaluation.
-   Returns an opaque record for CollectDetailedBalanceFSTasks.
-   Falls back to synchronous sequential evaluation (with short-circuit
-   on the first violation) when no subkernels are available.
-   ---------------------------------------------------------------- *)
-SubmitDetailedBalanceFSTasks[matrix_Association, allStates_List, symEnergy_,
-                              extraAssumptions_List : {}] := Module[
-  {n = Length[allStates], pairs, exprs,
-   uniqueIdxs, canonIdx, uniqueExprs,
-   assm, nK, batches, tasks, results},
-
-  pairs = Flatten[Table[{i, j}, {i, 1, n}, {j, i + 1, n}], 1];
-  If[Length[pairs] == 0,
-    Return[<|"async" -> False, "results" -> {}, "pairs" -> {}, "allStates" -> allStates,
-             "uniqueIdxs" -> {}, "canonIdx" -> {}|>]];
-
-  exprs = Map[
-    Function[ij,
-      With[{si = allStates[[ij[[1]]]], sj = allStates[[ij[[2]]]]},
-        With[{tij = Lookup[matrix, Key[{si, sj}], 0],
-              tji = Lookup[matrix, Key[{sj, si}], 0],
-              ei  = symEnergy[si] /. {r_Real :> Rationalize[r]},
-              ej  = symEnergy[sj] /. {r_Real :> Rationalize[r]}},
-          tij * Exp[-\[Beta] * ei] - tji * Exp[-\[Beta] * ej]]]],
-    pairs];
-
-  (* Deduplicate: submit FullSimplify only for unique expressions. *)
-  {uniqueIdxs, canonIdx} = $dbcDedup[exprs];
-  uniqueExprs = exprs[[uniqueIdxs]];
-
-  assm = Join[{\[Beta] > 0}, extraAssumptions];
-  nK   = Length[Kernels[]];
-
-  If[nK > 0,
-    (* Partition into exactly nK batches (one per subkernel) and submit each
-       as a single ParallelSubmit task.  Limiting to nK tasks prevents queue
-       buildup while the main kernel is busy with BFS, since all batches
-       start immediately on their assigned kernels without queuing. *)
-    batches = Partition[uniqueExprs, UpTo[Ceiling[Length[uniqueExprs] / nK]]];
-    With[{a = assm},
-      tasks = Map[
-        Function[batch,
-          ParallelSubmit[
-            Map[FullSimplify[PiecewiseExpand[#], Assumptions -> a] &, batch]]],
-        batches]];
-    <|"async" -> True,  "tasks" -> tasks,
-      "pairs" -> pairs, "allStates" -> allStates,
-      "uniqueIdxs" -> uniqueIdxs, "canonIdx" -> canonIdx|>,
-
-    (* Synchronous fallback: evaluate all unique expressions. *)
-    results = Map[
-      Function[e, FullSimplify[PiecewiseExpand[e], Assumptions -> assm]],
-      uniqueExprs];
-    <|"async" -> False, "results" -> results,
-      "pairs" -> pairs, "allStates" -> allStates,
-      "uniqueIdxs" -> uniqueIdxs, "canonIdx" -> canonIdx|>]
-]
-
-
-(* ----------------------------------------------------------------
-   CollectDetailedBalanceFSTasks
-   Given the record from SubmitDetailedBalanceFSTasks, waits for all
-   FullSimplify results (WaitAll) and returns the violation list in
-   the same format as CheckDetailedBalance.
-   Length[results] may be < Length[pairs] when the sync path
-   short-circuited; violations beyond the first are not reported.
-   ---------------------------------------------------------------- *)
-CollectDetailedBalanceFSTasks[taskData_Association] := Module[
-  {pairs, allStates, uniqueIdxs, canonIdx, uniqueResults, idxToResult,
-   results, violations},
-  pairs       = taskData["pairs"];
-  allStates   = taskData["allStates"];
-  uniqueIdxs  = taskData["uniqueIdxs"];
-  canonIdx    = taskData["canonIdx"];
-  If[Length[pairs] == 0, Return[{}]];
-
-  (* Collect FullSimplify results for unique expressions only *)
-  uniqueResults = If[taskData["async"],
-    Flatten[WaitAll[taskData["tasks"]], 1],
-    taskData["results"]];
-
-  (* Expand unique results back to all pairs via canonIdx *)
-  idxToResult = AssociationThread[uniqueIdxs -> uniqueResults];
-  results = Map[Function[k, idxToResult[canonIdx[[k]]]], Range[Length[pairs]]];
-
-  violations = {};
-  Do[
-    If[results[[k]] =!= 0,
-      AppendTo[violations,
-        <|"pair"     -> {allStates[[pairs[[k, 1]]]], allStates[[pairs[[k, 2]]]]},
-          "residual" -> results[[k]]|>]],
-    {k, Length[results]}];
+    {k, Length[ntExprs]}];
   violations
 ]
 

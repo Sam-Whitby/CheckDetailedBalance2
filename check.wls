@@ -269,33 +269,6 @@ symPassCount  = 0; symFailCount  = 0;
 numPassCount  = 0; numFailCount  = 0;
 $loopIdx     = 0;
 
-(* ---- BFS / FS pipeline state ----
-   After each component's BFS, FS tasks are submitted to subkernels
-   asynchronously.  The next component's BFS then runs on the main
-   kernel while FS evaluates in parallel.  flushPending[] collects
-   the FS result (WaitAll) and prints it, called right after the
-   following component's BFS so FS has had BFS-time to evaluate. *)
-$fsPending = None;   (* record from SubmitDetailedBalanceFSTasks, or None *)
-$fsMeta    = None;   (* print metadata for the pending component *)
-
-flushPending[] := Module[{violations, symResult, failStr},
-  If[$fsPending =!= None,
-    violations = CollectDetailedBalanceFSTasks[$fsPending];
-    symResult  = If[violations === {}, "PASS", "FAIL"];
-    failStr    = If[violations === {}, "0", ToString[Length[violations]]];
-    If[symResult === "PASS", symPassCount++, symFailCount++];
-    clearProgress[];
-    Print[StringPadRight[$fsMeta["bitsStr"],           colBits],
-          StringPadRight[$fsMeta["stateStr"],          colState],
-          StringPadRight[ToString[$fsMeta["nStates"]], colN],
-          If[mode =!= "Numerical",
-             StringPadRight[symResult, colSym] <> StringPadRight[failStr, colFail], ""],
-          If[mode =!= "Symbolic",
-             StringPadRight[$fsMeta["klStr"],     colKL] <>
-             StringPadRight[$fsMeta["numResult"], colNum], ""]];
-    $fsPending = None;
-    $fsMeta    = None]];
-
 Do[
   $loopIdx++;
   state = Check[BitsToState[bitString], $Failed];
@@ -314,10 +287,6 @@ Do[
                "TimeLimit"   -> 120.,
                "Verbose"     -> verbose];
 
-  (* Collect and print the PREVIOUS component's FS result now that BFS
-     is complete — FS has had BFS-time to evaluate before WaitAll blocks. *)
-  flushPending[];
-
   If[MatchQ[treeData, $dbc$cantHandle[_]],
     clearProgress[];
     Print[StringPadRight[bitsStr,  colBits], StringPadRight[stateStr, colState],
@@ -333,57 +302,36 @@ Do[
 
   (* ---- Per-component symbolic parameters ---- *)
   (* If DynamicSymParams is defined, call it with this component's states
-     to get exactly the symbolic variables needed.
+     to get the symbolic variables needed for this component.
      "couplings" / "eps" — symbolic atoms for FullSimplify assumptions.
-       For standard files these are scalar symbols like Jpair12.
-       For abstract-function files these are function-application atoms
-       like fieldF[0,0,2] and couplingJ[1,2,1]; FullSimplify treats each
-       unevaluated application as an independent real atom.
-     "numericParams" — scalar symbols for the numerical MCMC Block.
-       For standard files same as "couplings".
-       For abstract-function files: the $jPairSym symbols plus the
-       concrete-implementation parameters (fieldAmp, lambdaJ, etc.). *)
+     "numericParams"     — scalar symbols for the numerical MCMC Block. *)
   If[$hasDynParams,
-    dynP         = DynamicSymParams[allStates];
-    dynVars      = Join[Lookup[dynP, "eps", {}], Lookup[dynP, "couplings", {}]];
-    dynNumVars   = Lookup[dynP, "numericParams", dynVars];
-    compSymVars    = Union[$staticSymVars, dynVars];
+    dynP            = DynamicSymParams[allStates];
+    dynVars         = Join[Lookup[dynP, "eps", {}], Lookup[dynP, "couplings", {}]];
+    dynNumVars      = Lookup[dynP, "numericParams", dynVars];
+    compSymVars     = Union[$staticSymVars, dynVars];
     compNumericVars = Union[$staticSymVars, dynNumVars],
-    compSymVars    = $staticSymVars;
+    compSymVars     = $staticSymVars;
     compNumericVars = $staticSymVars];
-  (* Fixed params are real for FullSimplify purposes (e.g. jumpSigma ∈ Reals) *)
   compSymAssumptions = Map[Element[#, Reals] &, Union[compSymVars, $fixedSymVars]];
 
   (* ---- Symbolic check ---- *)
-  (* FastChecker=1: synchronous Exp-polynomial check (fast path + FS fallback).
-     Default: async Submit/Collect pipeline using FullSimplify on subkernels. *)
   symResult = "-"; failStr = "-";
-  If[fastChecker && mode =!= "Numerical",
-    (* Synchronous fast check — result available immediately *)
-    With[{viol = CheckDetailedBalanceFast[matrix, allStates, $energy, compSymAssumptions]},
+  If[mode =!= "Numerical",
+    With[{viol = If[fastChecker,
+                  CheckDetailedBalanceFast[matrix, allStates, $energy, compSymAssumptions],
+                  CheckDetailedBalance[    matrix, allStates, $energy, compSymAssumptions]]},
       symResult = If[viol === {}, "PASS", "FAIL"];
       failStr   = If[viol === {}, "0",    ToString[Length[viol]]];
-      If[symResult === "PASS", symPassCount++, symFailCount++]];
-    $fsPending = None,
-    (* Async FS pipeline: submit now, collect after next BFS *)
-    $fsPending = If[mode =!= "Numerical",
-      SubmitDetailedBalanceFSTasks[matrix, allStates, $energy, compSymAssumptions],
-      None]];
+      If[symResult === "PASS", symPassCount++, symFailCount++]]];
 
-  (* ---- Numerical MCMC check (overlaps with async FS on subkernels) ---- *)
+  (* ---- Numerical MCMC check ---- *)
   klStr = "-"; numResult = "-";
   If[mode =!= "Symbolic" && nStates > 1,
-    (* compNumericVars contains the scalar symbols that need numeric values:
-       for standard files these are the coupling symbols (Jpair12 etc.);
-       for abstract-function files these are $jPairSym symbols plus the
-       concrete-implementation parameters (fieldAmp, lambdaJ, etc.). *)
     allBlockVars = Union[compNumericVars, $fixedSymVars];
-    (* Helper that runs the MCMC inside the current Block scope *)
     $runNumericalMCMC[] := (
       mcmcCounts = RunNumericalMCMCAT[allStates, $alg, $numBeta, "NSteps" -> nSteps];
       boltzmann  = BoltzmannWeightsAT[allStates, $energy, $numBeta]);
-    (* For abstract-function files: activate concrete fieldF / couplingJ
-       implementations inside an outer Block before running MCMC. *)
     $activateAndRun[] :=
       If[ValueQ[$abstractFunctions] && TrueQ[$abstractFunctions],
         Block[{fieldF, couplingJ},
@@ -400,42 +348,28 @@ Do[
         If[compNumericVars =!= {}, MapThread[Set, {compNumericVars, compNumVals}]];
         If[$fixedSymVars =!= {}, MapThread[Set, {$fixedSymVars, $fixedNumVals}]];
         $activateAndRun[]],
-      (* Fully numeric: no symbolic vars of any kind *)
       $activateAndRun[]];
     simFreq = N[# / Total[mcmcCounts]] & /@ mcmcCounts;
     kl = Total @ Table[
       With[{p = simFreq[s], q = N @ boltzmann[s]},
         If[p > 0 && q > 0, p * Log[p / q], 0.]], {s, allStates}];
-    klStr     = Which[
-                  Abs[kl] < 5.*^-4, "~0",
-                  True,              ToString[NumberForm[kl, {4, 3}]]];
+    klStr     = Which[Abs[kl] < 5.*^-4, "~0", True, ToString[NumberForm[kl, {4, 3}]]];
     numResult = If[kl < 0.02, "PASS", "FAIL"];
     If[numResult === "PASS", numPassCount++, numFailCount++]];
 
   (* ---- Print result row ---- *)
-  (* Fast checker or Numerical-only: result available now, print immediately.
-     Pipeline mode: defer printing until flushPending[] after next BFS. *)
-  If[fastChecker || $fsPending === None,
-    clearProgress[];
-    Print[StringPadRight[bitsStr,           colBits],
-          StringPadRight[stateStr,          colState],
-          StringPadRight[ToString[nStates], colN],
-          If[mode =!= "Numerical",
-             StringPadRight[symResult, colSym] <> StringPadRight[failStr, colFail], ""],
-          If[mode =!= "Symbolic",
-             StringPadRight[klStr, colKL] <> StringPadRight[numResult, colNum], ""]];
-    $fsMeta = None,
-    (* Pipeline mode: store metadata for deferred printing *)
-    $fsMeta = <|"bitsStr"  -> bitsStr,  "stateStr" -> stateStr,
-                "nStates"  -> nStates,
-                "klStr"    -> klStr,    "numResult" -> numResult|>];
+  clearProgress[];
+  Print[StringPadRight[bitsStr,           colBits],
+        StringPadRight[stateStr,          colState],
+        StringPadRight[ToString[nStates], colN],
+        If[mode =!= "Numerical",
+           StringPadRight[symResult, colSym] <> StringPadRight[failStr, colFail], ""],
+        If[mode =!= "Symbolic",
+           StringPadRight[klStr, colKL] <> StringPadRight[numResult, colNum], ""]];
 
   writeProgress[$loopIdx],
 
   {bitString, allBitStrings}];
-
-(* Collect and print the last component's deferred FS result *)
-flushPending[];
 
 (* Final newline to clear progress bar before the summary *)
 If[verbose, WriteString[$Output, "\n"]];

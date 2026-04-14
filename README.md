@@ -17,7 +17,7 @@ Symbolically proves or disproves detailed balance for Monte Carlo algorithms wri
    ```
    T(i→j)·exp(−β E(i)) − T(j→i)·exp(−β E(j))  =?  0
    ```
-   β is kept as a free symbol so Boltzmann factors cancel algebraically. Two checkers are available (see below).
+   β is kept as a free symbol so Boltzmann factors cancel algebraically.
 
 4. **Numerical MCMC check.** The algorithm is run as a genuine Markov chain; the empirical distribution is compared to the Boltzmann distribution via KL divergence. KL < 0.02 is a pass.
 
@@ -25,36 +25,37 @@ Symbolically proves or disproves detailed balance for Monte Carlo algorithms wri
 
 ## Symbolic checkers
 
-Two symbolic checking methods are available, selectable per run:
+Two symbolic checking methods are available, selectable per run.
+
+Both checkers share the same efficiency pipeline before simplification:
+- **Trivial-zero filter:** pairs where both transition weights are zero are skipped immediately without any algebra.
+- **Syntactic deduplication:** the remaining expressions are hashed; each unique expression is simplified only once and the result broadcast to all duplicate pairs. For periodic lattices this gives a speedup proportional to the translational symmetry (e.g. 9× for a 3×3 grid, reducing ~2500 pairs to ~280 unique ones).
+- **Threshold-based parallelism:** if the number of unique expressions exceeds the kernel count, `ParallelMap` distributes work across subkernels with per-expression scheduling for natural load balancing; otherwise evaluation is sequential to avoid dispatch overhead.
 
 ### Standard checker (default)
-Uses `FullSimplify[PiecewiseExpand[expr], {β > 0, ...}]` for each state pair. Correct for all algorithm types. Slow for complex algorithms (tens of seconds per component).
-
-Both checkers apply **syntactic deduplication**: before dispatching to subkernels, all detailed-balance expressions are hashed. Pairs with identical hash are mapped to the same unique expression; simplification is run only once per unique expression, and results are broadcast back. For periodic lattices this gives a speedup proportional to the number of lattice translations (e.g. 9× for a 3×3 grid with 2 particles, reducing 2556 pairs to ~284 unique expressions).
+Uses `FullSimplify[PiecewiseExpand[expr], {β > 0, ...}]`. Correct for all algorithm types.
 
 ### FastChecker (`FastChecker=1`)
-An Exp-polynomial algebraic checker. After `PiecewiseExpand`, detailed balance expressions for Boltzmann algorithms reduce — within each feasible sign case — to sums of terms `c·exp(−β·L)` where c is a rational coefficient and L is a polynomial in coupling constants. Detailed balance holds iff all coefficient sums vanish, which is verified by `Expand[...] === 0` (microseconds).
+An Exp-polynomial algebraic checker. After `PiecewiseExpand`, detailed balance expressions for Boltzmann algorithms reduce — within each feasible sign case — to sums of terms `c·exp(−β·L)` where c is a rational coefficient and L is a polynomial in coupling constants. Detailed balance holds iff all coefficient sums vanish, verified by `Expand[...] === 0` (microseconds).
 
 **Algorithm:**
-1. `PiecewiseExpand` splits the expression into sign cases (e.g. `Jpair12 > 0`, `Jpair13 == 0`).
-2. Each case is tested for feasibility (quick `Reduce` on linear real arithmetic); infeasible cases are skipped.
-3. Equality constraints in the condition (e.g. `Jpair12 == 0`) are substituted into the value.
+1. `PiecewiseExpand` splits the expression into sign cases (e.g. `Jpair12 > 0`).
+2. Each case is tested for feasibility (`Reduce` on linear real arithmetic); infeasible cases are skipped.
+3. Equality constraints (e.g. `Jpair12 == 0`) are substituted into the value.
 4. The value is normalised: `(E^a)^n → E^(n·a)`, products of `Exp` are merged, and the result is expanded to a sum of `c·E^(poly)` terms.
-5. Terms are grouped by their exponent polynomial (compared via `Expand[p1−p2] === 0`). If all coefficient groups sum to zero, the expression is identically zero.
-6. **Fallback:** if any step is inconclusive (unusual expression structure), the pair falls back to `FullSimplify`. The result is always exact — never approximate.
-
-The fast checker is parallelised with the same subkernel pool as the standard checker.
-
-**Measured speedups** (on a 4-core machine, `MaxBitString=1111111111`, `Mode=Symbolic`):
-
-| Algorithm | Standard | FastChecker | Speedup |
-|-----------|----------|-------------|---------|
-| `vmmc_2d.wl` | ~66s | ~49s | 26% |
-| `vmmc_2d_field.wl` | ~130s | ~61s | 53% |
-
-The speedup is larger for `vmmc_2d_field.wl` because its field and coupling terms produce complex expressions that `FullSimplify` struggles with, but which the polynomial coefficient check resolves trivially.
+5. Terms are grouped by exponent polynomial. Detailed balance holds iff all coefficient groups sum to zero.
+6. **Fallback:** if any step is inconclusive, the expression falls back to `FullSimplify`. The result is always exact.
 
 **Applicability:** Works directly for all algorithms using Metropolis acceptance. Falls back gracefully for other acceptance functions (Barker, heat-bath) or unusual expression structures.
+
+**Timings** (4-core machine, `MaxBitString=1111111111`, `Mode=Symbolic`):
+
+| Algorithm | Standard | FastChecker |
+|-----------|----------|-------------|
+| `vmmc_2d.wl` | ~58s | ~50s |
+| `vmmc_2d_field.wl` | ~98s | ~59s |
+
+FastChecker is faster for `vmmc_2d_field.wl` because its abstract field and coupling terms produce expressions that `FullSimplify` must work hard on but which the polynomial coefficient check resolves trivially.
 
 ---
 
@@ -138,7 +139,7 @@ ValidStateIDs[maxId_] := ...           (* restrict enumeration to valid IDs *)
 
 `vmmc_2d_field.wl` separates symbolic and numerical modes:
 
-**Symbolic check:** `fieldF` and `couplingJ` have no DownValues. Each evaluation `fieldF[x,y,L]` and `couplingJ[a,b,d2]` is treated as an independent free real atom, proving detailed balance for *all possible* functions simultaneously.
+**Symbolic check:** `fieldF` and `couplingJ` have no DownValues. Each evaluation is treated as an independent free real atom, proving detailed balance for *all possible* functions simultaneously.
 
 **Numerical MCMC / animation:** Concrete implementations (`$fieldFConcrete`, `$couplingJConcrete`) are activated inside a `Block`.
 
@@ -183,6 +184,7 @@ $abstractFunctions = True
 | `jump_1d_weighted.wl` | 1D jump dynamics using `RandomChoice[weights → ...]` | PASS |
 | `kawasaki_1d_fail.wl` | Sign-reversed dE in Metropolis | FAIL |
 | `cluster_1d_fail.wl` | Cluster slides only rightward (asymmetric proposal) | FAIL |
+| `vmmc_2d_edit.wl` | VMMC with only 3 of 4 directions (asymmetric proposal) | FAIL on 3×3, PASS on 2×2 |
 
 ---
 
@@ -192,12 +194,12 @@ $abstractFunctions = True
 # Check 2D Kawasaki symbolically + numerically
 wolframscript -file check.wls examples3/kawasaki_2d.wl
 
-# Check VMMC with fast polynomial checker (faster for complex algorithms)
+# Check VMMC with fast polynomial checker
 wolframscript -file check.wls examples3/vmmc_2d_field.wl \
   MaxBitString=1111111111 Mode=Symbolic FastChecker=1
 
 # Target a specific 3×3 state directly (bit string for {1,2,0,...} on a 3×3 grid)
-# Avoids enumerating the ~125k bit strings needed to reach 3×3 states via MaxBitString
+# Avoids enumerating ~125k bit strings to reach 3×3 states via MaxBitString
 wolframscript -file check.wls examples3/vmmc_2d.wl \
   SeedBitStrings=11110101011110011 Mode=Symbolic
 
