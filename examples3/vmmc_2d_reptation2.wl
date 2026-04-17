@@ -148,12 +148,13 @@ $virtualPairEnergy[typeI_, typeJ_, vI_, qSite_, L_] :=
 
 $vmmcBuildCluster[state_, L_, seed_, dir_] :=
   Module[{
-    cluster    = {seed},
-    inCluster  = <|seed -> True|>,
-    clusterDir = <|seed -> dir|>,
-    claimedPos = <|$applyDir[seed, dir, L] -> True|>,
-    queue      = {seed},
-    frustrated = False,
+    cluster      = {seed},
+    inCluster    = <|seed -> True|>,
+    clusterDir   = <|seed -> dir|>,
+    claimedPos   = <|$applyDir[seed, dir, L] -> True|>,
+    comparedPairs = <||>,
+    queue        = {seed},
+    frustrated   = False,
     p, pType, pDir, pPost, pRev, nbrs, q, qType,
     eInit, eFwd, eRev, wFwd, wRev, r1, r2, qDir, qDest
   },
@@ -186,6 +187,11 @@ $vmmcBuildCluster[state_, L_, seed_, dir_] :=
           eInit = $virtualPairEnergy[pType, qType, p,     q, L];
           eFwd  = $virtualPairEnergy[pType, qType, pPost, q, L];
           eRev  = $virtualPairEnergy[pType, qType, pRev,  q, L];
+          (* Record that this pair has had its link probabilities evaluated.
+             If q later joins the cluster, this pair's bond energy change is
+             already accounted for by the link mechanism and must be excluded
+             from the intra-cluster Metropolis correction below. *)
+          comparedPairs[{Min[p, q], Max[p, q]}] = True;
           wFwd = Piecewise[{
               {1,                               eFwd === Infinity},
               {1 - Exp[\[Beta] (eInit - eFwd)], eInit < eFwd}},
@@ -223,7 +229,7 @@ $vmmcBuildCluster[state_, L_, seed_, dir_] :=
         {k, Length[nbrs]}
       ]
     ];
-    If[frustrated, None, {cluster, clusterDir}]
+    If[frustrated, None, {cluster, clusterDir, comparedPairs}]
   ]
 
 
@@ -232,7 +238,7 @@ $vmmcBuildCluster[state_, L_, seed_, dir_] :=
 Algorithm[state_List] :=
   Module[{
     L, occupied, seed, dirs, dir,
-    result, cluster, clusterDir, n,
+    result, cluster, clusterDir, comparedPairs, n,
     newState, dest, dEIntra
   },
     L        = Round[Sqrt[Length[state]]];
@@ -245,7 +251,7 @@ Algorithm[state_List] :=
 
     result = $vmmcBuildCluster[state, L, seed, dir];
     If[result === None, Return[state]];
-    {cluster, clusterDir} = result;
+    {cluster, clusterDir, comparedPairs} = result;
 
     (* Apply moves: clear all old positions first, then place at destinations *)
     newState = state;
@@ -261,12 +267,18 @@ Algorithm[state_List] :=
        translation, so relative positions within the cluster can change.
        MetropolisProb[dE_intra] corrects for this. *)
     n = Length[cluster];
+    (* Only sum over intra-cluster pairs that were NOT compared during cluster
+       growth. Pairs that were evaluated for links already have their bond
+       energy change accounted for by the wFwd/wRev mechanism; including them
+       here would double-count that contribution. *)
     dEIntra = Sum[
       With[{si = cluster[[i]], sj = cluster[[j]],
             ti = $applyDir[cluster[[i]], clusterDir[cluster[[i]]], L],
             tj = $applyDir[cluster[[j]], clusterDir[cluster[[j]]], L]},
-        If[MemberQ[$allNeighbors2D[ti, L], tj], couplingJ[state[[si]], state[[sj]], 1], 0] -
-        If[MemberQ[$allNeighbors2D[si, L], sj], couplingJ[state[[si]], state[[sj]], 1], 0]
+        If[!KeyExistsQ[comparedPairs, {Min[si, sj], Max[si, sj]}],
+          If[MemberQ[$allNeighbors2D[ti, L], tj], couplingJ[state[[si]], state[[sj]], 1], 0] -
+          If[MemberQ[$allNeighbors2D[si, L], sj], couplingJ[state[[si]], state[[sj]], 1], 0],
+          0]
       ],
       {i, 1, n}, {j, i+1, n}
     ];
