@@ -10,7 +10,8 @@
    particle p (moving from p to pPost = p + pDir):
 
      (a) Direct collision — q sits exactly at pPost:
-           q_dir = pDir   (same as p, conventional VMMC)
+           q_dir = RandomChoice of {pDir, left_perp, right_perp}
+                   (any direction except reverse of pDir)
 
      (b) Vacancy-filling — q is a nearest neighbour of p's old site p
          but is NOT pPost:
@@ -174,7 +175,8 @@ $vmmcBuildCluster[state_, L_, seed_, dir_] :=
           (* Assign direction to q based on its geometric relationship to p *)
           qDir = Which[
             q === pPost,
-              pDir,                  (* (a) direct collision: same direction *)
+              RandomChoice[DeleteCases[{{0,1},{0,-1},{1,0},{-1,0}}, {-pDir[[1]], -pDir[[2]]}]],
+                                     (* (a) direct collision: any direction except reverse *)
             MemberQ[$allNeighbors2D[p, L], q],
               $dirTo[q, p, L],       (* (b) vacancy-filling: step into p's old site *)
             True,
