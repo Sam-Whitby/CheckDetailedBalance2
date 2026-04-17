@@ -231,7 +231,7 @@ Algorithm[state_List] :=
   Module[{
     L, occupied, seed, dirs, dir,
     result, cluster, clusterDir, n,
-    newState, dest, dE_intra
+    newState, dest, dEIntra
   },
     L        = Round[Sqrt[Length[state]]];
     occupied = Flatten[Position[state, _?(# > 0 &)]];
@@ -259,7 +259,7 @@ Algorithm[state_List] :=
        translation, so relative positions within the cluster can change.
        MetropolisProb[dE_intra] corrects for this. *)
     n = Length[cluster];
-    dE_intra = Sum[
+    dEIntra = Sum[
       With[{si = cluster[[i]], sj = cluster[[j]],
             ti = $applyDir[cluster[[i]], clusterDir[cluster[[i]]], L],
             tj = $applyDir[cluster[[j]], clusterDir[cluster[[j]]], L]},
@@ -269,7 +269,7 @@ Algorithm[state_List] :=
       {i, 1, n}, {j, i+1, n}
     ];
 
-    If[RandomReal[] < MetropolisProb[dE_intra], newState, state]
+    If[RandomReal[] < MetropolisProb[dEIntra], newState, state]
   ]
 
 
