@@ -192,8 +192,8 @@ allBitStrings =
 colBits  = If[seedBitStrings =!= None,
   Max[14, Max[StringLength /@ StringSplit[seedBitStrings, ","]] + 2],
   Max[14, StringLength[maxBitString] + 2]];
-colState = 26; colN = 9; colSym = 10; colFail = 8; colKL = 12; colNum = 10;
-totalCols = colBits + colState + colN +
+colState = 26; colN = 9; colSym = 10; colFail = 8; colKL = 12; colNum = 10; colErgo = 14;
+totalCols = colBits + colState + colN + colErgo +
   If[mode =!= "Numerical", colSym + colFail, 0] +
   If[mode =!= "Symbolic",  colKL  + colNum,  0];
 
@@ -220,6 +220,7 @@ Print[];
 Print[StringPadRight["Bits",    colBits],
       StringPadRight["State",   colState],
       StringPadRight["#States", colN],
+      StringPadRight["Ergodic", colErgo],
       If[mode =!= "Numerical",
          StringPadRight["Symbolic", colSym] <> StringPadRight["#Fail", colFail], ""],
       If[mode =!= "Symbolic",
@@ -267,6 +268,7 @@ coveredAssoc = <||>;   (* Association for O(1) covered-state lookup *)
 testedCount  = 0;
 symPassCount  = 0; symFailCount  = 0;
 numPassCount  = 0; numFailCount  = 0;
+ergoPassCount = 0; ergoFailCount = 0;
 $loopIdx     = 0;
 
 Do[
@@ -299,6 +301,13 @@ Do[
   nStates   = Length[allStates];
   coveredAssoc = Join[coveredAssoc, Association[# -> True & /@ allStates]];
   testedCount++;
+
+  (* ---- Ergodicity check ---- *)
+  ergoResult = CheckErgodicity[allStates];
+  ergoStr    = If[ergoResult["ergodic"],
+    ergoPassCount++; "PASS (" <> ToString[ergoResult["found"]] <> ")",
+    ergoFailCount++; "FAIL (" <> ToString[ergoResult["found"]] <>
+                     "/" <> ToString[ergoResult["theoretical"]] <> ")"];
 
   (* ---- Per-component symbolic parameters ---- *)
   (* If DynamicSymParams is defined, call it with this component's states
@@ -362,6 +371,7 @@ Do[
   Print[StringPadRight[bitsStr,           colBits],
         StringPadRight[stateStr,          colState],
         StringPadRight[ToString[nStates], colN],
+        StringPadRight[ergoStr,           colErgo],
         If[mode =!= "Numerical",
            StringPadRight[symResult, colSym] <> StringPadRight[failStr, colFail], ""],
         If[mode =!= "Symbolic",
@@ -380,10 +390,13 @@ If[verbose, WriteString[$Output, "\n"]];
 Print[];
 Print[StringRepeat["-", totalCols]];
 Print["Systems tested (distinct connected components): ", testedCount];
+Print["Ergodicity -- PASS: ", ergoPassCount, "  FAIL: ", ergoFailCount];
 If[mode =!= "Numerical",
-  Print["Symbolic  -- PASS: ", symPassCount, "  FAIL: ", symFailCount]];
+  Print["Symbolic   -- PASS: ", symPassCount, "  FAIL: ", symFailCount]];
 If[mode =!= "Symbolic" && (numPassCount + numFailCount) > 0,
-  Print["Numerical -- PASS: ", numPassCount, "  FAIL: ", numFailCount]];
+  Print["Numerical  -- PASS: ", numPassCount, "  FAIL: ", numFailCount]];
+If[ergoFailCount > 0,
+  Print["*** ERGODICITY VIOLATION DETECTED ***"]];
 If[symFailCount == 0 && numFailCount == 0 && testedCount > 0,
   Print["All tested systems satisfy detailed balance."],
   If[testedCount == 0,

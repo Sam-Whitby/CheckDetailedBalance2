@@ -960,6 +960,29 @@ CheckCouplingSymmetry[typesToCheck_List, d2Values_List] :=
 
 
 (* ================================================================
+   ERGODICITY CHECK (state-counting)
+   ================================================================
+   For N labeled particles on S lattice sites (hard-sphere, no
+   double-occupation) the theoretical number of states is the
+   falling factorial  (S)_N = S*(S-1)*...*(S-N+1).
+   S and N are read from any one discovered state; no external
+   parameters needed.
+   Returns <|"ergodic"->True/False, "found"->k, "theoretical"->m|>.
+   ================================================================ *)
+
+CheckErgodicity[allStates_List] :=
+  Module[{s0, S, N, theoretical, nFound},
+    s0          = First[allStates];
+    S           = Length[s0];
+    N           = Count[s0, k_ /; k > 0];
+    theoretical = Product[S - k, {k, 0, N - 1}];
+    nFound      = Length[allStates];
+    <|"ergodic"      -> (nFound == theoretical),
+      "found"        -> nFound,
+      "theoretical"  -> theoretical|>]
+
+
+(* ================================================================
    FAST EXP-POLYNOMIAL DETAILED BALANCE CHECKER
    ================================================================
    Alternative to FullSimplify.  For Boltzmann algorithms the DB

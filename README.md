@@ -23,6 +23,18 @@ Symbolically proves or disproves detailed balance for Monte Carlo algorithms wri
 
 ---
 
+## Ergodicity check
+
+In addition to detailed balance, the checker tests **ergodicity** (irreducibility of the Markov chain) using state counting. For N labeled particles on S lattice sites with hard-sphere exclusion, the theoretical number of reachable states is the falling factorial:
+
+(S)_N = S · (S−1) · … · (S−N+1)
+
+Both S and N are inferred from any discovered state; no external parameters are needed. After BFS, the checker compares the number of discovered states to this theoretical value. A shortfall indicates the chain is confined to a subset of configuration space — a form of non-ergodicity that detailed balance cannot detect.
+
+The ergodicity result appears as a column in the output table (`PASS (k)` or `FAIL (k/m)` where k is found and m is theoretical) and is summarised separately at the end of the run.
+
+**Key point:** ergodicity and detailed balance are independent. `kawasaki_1d_nonergodic.wl` demonstrates this — it passes detailed balance but fails ergodicity because type-2+ particles are permanently frozen, creating disconnected sectors of configuration space.
+
 ## Symbolic checkers
 
 Two symbolic checking methods are available, selectable per run.
@@ -175,16 +187,17 @@ $abstractFunctions = True
 
 ## Example files (`examples3/`)
 
-| File | Description | DB |
-|------|-------------|----|
-| `kawasaki_1d.wl` | 1D Kawasaki (nearest-neighbour swap) on a periodic ring | PASS |
-| `kawasaki_2d.wl` | 2D Kawasaki on a periodic square lattice | PASS |
-| `vmmc_2d.wl` | Virtual Move Monte Carlo (Whitelam–Geissler) on a 2D torus | PASS |
-| `vmmc_2d_field.wl` | VMMC with user-defined field and coupling functions | PASS |
-| `jump_1d_weighted.wl` | 1D jump dynamics using `RandomChoice[weights → ...]` | PASS |
-| `kawasaki_1d_fail.wl` | Sign-reversed dE in Metropolis | FAIL |
-| `cluster_1d_fail.wl` | Cluster slides only rightward (asymmetric proposal) | FAIL |
-| `vmmc_2d_edit.wl` | VMMC with only 3 of 4 directions (asymmetric proposal) | FAIL on 3×3, PASS on 2×2 |
+| File | Description | DB | Ergodic |
+|------|-------------|----|----|
+| `kawasaki_1d.wl` | 1D Kawasaki (nearest-neighbour swap) on a periodic ring | PASS | PASS |
+| `kawasaki_2d.wl` | 2D Kawasaki on a periodic square lattice | PASS | PASS |
+| `vmmc_2d.wl` | Virtual Move Monte Carlo (Whitelam–Geissler) on a 2D torus | PASS | PASS |
+| `vmmc_2d_field.wl` | VMMC with user-defined field and coupling functions | PASS | PASS |
+| `jump_1d_weighted.wl` | 1D jump dynamics using `RandomChoice[weights → ...]` | PASS | PASS |
+| `kawasaki_1d_fail.wl` | Sign-reversed dE in Metropolis | FAIL | PASS |
+| `kawasaki_1d_nonergodic.wl` | Kawasaki where only type-1 particles move; type-2+ frozen | PASS | FAIL |
+| `cluster_1d_fail.wl` | Cluster slides only rightward (asymmetric proposal) | FAIL | FAIL |
+| `vmmc_2d_edit.wl` | VMMC with only 3 of 4 directions (asymmetric proposal) | FAIL on 3×3, PASS on 2×2 | — |
 
 ---
 
