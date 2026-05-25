@@ -138,6 +138,7 @@ wolframscript -file animate.wls <algorithm.wl> Sites=<n> N=<n> [options]
 | `Simple=1` | off | Fast 2-colour mode (holes vs particles) |
 | `RecordEvery=N` | `1` | Record state every N steps |
 | `Jpair<a><b>=f` | random | Coupling constant, e.g. `Jpair12=-1.0` |
+| `NoParams=1` | off | Hide the right-hand parameter panel (faster rendering on large systems) |
 
 ---
 

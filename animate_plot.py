@@ -171,9 +171,10 @@ def draw_info_panel(ax, scalars: dict, coupling_formula: str, field_formula: str
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python3 animate_plot.py <data.json>")
+        print("Usage: python3 animate_plot.py <data.json> [--no-params]")
         sys.exit(1)
 
+    no_params_flag = "--no-params" in sys.argv[2:]
     d = load_data(sys.argv[1])
 
     steps            = d["steps"]
@@ -194,7 +195,7 @@ def main():
     # Parse Jpair coupling matrix and remaining scalar params
     jpair_matrix, has_jpair = build_jpair_matrix(params, n_types)
     scalars = scalar_params(params, n_types)
-    has_params = bool(params) or bool(coupling_formula) or bool(field_formula)
+    has_params = (bool(params) or bool(coupling_formula) or bool(field_formula)) and not no_params_flag
 
     # Lattice colour map
     if simple:

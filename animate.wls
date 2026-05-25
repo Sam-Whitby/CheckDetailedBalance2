@@ -84,6 +84,7 @@ animBeta    = None;
 fps         = 10.;
 simpleMode  = False;
 recordEvery = 1;
+noParams    = False;
 
 Do[
   If[StringMatchQ[opt, "Sites="       ~~ __], nSites      = ToExpression[StringDrop[opt,  6]]];
@@ -94,7 +95,9 @@ Do[
   (* Legacy Delay= support: convert seconds -> fps *)
   If[StringMatchQ[opt, "Delay="       ~~ __], fps         = N[1 / ToExpression[StringDrop[opt, 6]]]];
   If[StringMatchQ[opt, "Simple="      ~~ __], simpleMode  = (StringDrop[opt, 7] =!= "0")];
-  If[StringMatchQ[opt, "RecordEvery=" ~~ __], recordEvery = ToExpression[StringDrop[opt, 12]]],
+  If[StringMatchQ[opt, "RecordEvery=" ~~ __], recordEvery = ToExpression[StringDrop[opt, 12]]];
+  If[StringMatchQ[opt, "NoParams="    ~~ __], noParams    = (StringDrop[opt, 9] =!= "0")];
+  If[StringMatchQ[opt, "NoParams"],           noParams    = True],
   {opt, kvArgs}];
 
 (* ---- Load algorithm file ---- *)
@@ -249,7 +252,8 @@ pythonCmd = SelectFirst[{"python3.11", "python3", "python"},
   Function[cmd, RunProcess[{cmd, "-c", "import matplotlib"}, "ExitCode"] === 0],
   "python3"];
 
-result = RunProcess[{pythonCmd, pyScript, dataFile}];
+result = RunProcess[Join[{pythonCmd, pyScript, dataFile},
+                        If[TrueQ[noParams], {"--no-params"}, {}]]];
 If[result["ExitCode"] != 0,
   (* Only print non-empty streams; a non-zero exit with empty output usually
      means the user simply closed the animation window. *)
