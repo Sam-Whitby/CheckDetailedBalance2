@@ -35,6 +35,26 @@ The ergodicity result appears as a column in the output table (`PASS (k)` or `FA
 
 **Key point:** ergodicity and detailed balance are independent. `kawasaki_1d_nonergodic.wl` demonstrates this — it passes detailed balance but fails ergodicity because type-2+ particles are permanently frozen, creating disconnected sectors of configuration space.
 
+## Continuous-limit VMMC (`vmmc_continuous.wl`)
+
+`vmmc_continuous.wl` generalises `vmmc_2d_field.wl` to support K uniformly-spaced translation directions and an extended interaction cutoff $maxD2, so that the same code describes both checkable lattice systems and large fine-grained systems that converge to continuous off-lattice VMMC comparable to MPCD+MD.
+
+**Two continuous-limit control parameters:**
+- `numDirections` K — number of directions uniformly spaced over [0, 2π). K=4: compass (checker default); K=8: compass+diagonal; larger K approaches isotropic diffusion as nGrid grows.
+- `nGrid` — inferred from the state as `Round[Sqrt[Length[state]]]`. Increasing nGrid reduces lattice spacing b=L_box/nGrid; as nGrid→∞ with fixed K, the discrete walk approaches Brownian motion.
+
+**Energy:** Abstract `couplingJ[type1, type2, d2]` summed over all site pairs within squared grid distance ≤ `$maxD2`. During the symbolic check, `couplingJ` has no DownValues — each `(a,b,d2)` triple is a free real atom, proving detailed balance for all coupling functions simultaneously. A concrete Lennard-Jones-like implementation activates for numerical MCMC runs.
+
+**VMMC acceptance:** Rigid cluster translation — intra-cluster distances are preserved, so ΔE_intra=0 and no post-cluster Metropolis step is needed. Superdetailed balance is satisfied by the Whitelam-Geissler link-probability mechanism.
+
+**Physical comparison:** At large nGrid and K, dimensionless dynamical exponents (cluster diffusion D∝n^{-ν}, MSD scaling α, intermediate scattering function shape) can be compared to MPCD+MD reference data to grade physical fidelity.
+
+```bash
+# Check vmmc_continuous.wl (K=4, 3×3 seed, symbolic + numerical)
+wolframscript -file check.wls examples3/vmmc_continuous.wl \
+  SeedBitStrings=11110101011110011 Mode=Both
+```
+
 ## Symbolic checkers
 
 Two symbolic checking methods are available, selectable per run.
@@ -198,6 +218,7 @@ $abstractFunctions = True
 | `kawasaki_1d_nonergodic.wl` | Kawasaki where only type-1 particles move; type-2+ frozen | PASS | FAIL |
 | `cluster_1d_fail.wl` | Cluster slides only rightward (asymmetric proposal) | FAIL | FAIL |
 | `vmmc_2d_edit.wl` | VMMC with only 3 of 4 directions (asymmetric proposal) | FAIL on 3×3, PASS on 2×2 | — |
+| `vmmc_continuous.wl` | VMMC with K uniformly-spaced directions and extended interaction cutoff $maxD2; same code is the continuous-limit reference | PASS | PASS |
 
 ---
 
