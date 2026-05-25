@@ -87,17 +87,24 @@ $maxD2 = 2
 $abstractFunctions = True
 
 (* ---- CONCRETE coupling (used only in numerical MCMC / animation) ----
-   Replace with any symmetric pairwise potential V(d2) you want.
-   Here: Lennard-Jones in grid-unit^2 coordinates.
-   Parameters: epsLJ (well depth), sigLJ (diameter in grid units).
-   The concrete function is activated by check.wls inside a Block. *)
+   Lennard-Jones in squared-grid-unit coordinates:
+     V(d²) = 4·epsLJ·[(σ²/d²)⁶ − (σ²/d²)³]
+   LJ minimum at d² = 2^(1/3)·σ², zero crossing at d² = σ².
+   sigLJ = 2^(-1/6) ≈ 0.891 places the minimum exactly at d²=1 (NN),
+   giving well depth V_min = -epsLJ at nearest-neighbour contact.
+   Both symbols are assigned directly below so animate.wls does not
+   overwrite them with random values. *)
+epsLJ = 1            (* well depth (exact); Mathematica converts to float as needed *)
+sigLJ = 2^(-1/6)     (* exact algebraic: LJ minimum falls exactly at d²=1 *)
+
 $couplingJConcrete[a_Integer, b_Integer, d2_Integer] :=
   If[d2 == 0 || d2 > $maxD2, 0,
      4 * epsLJ * ((sigLJ^2/d2)^6 - (sigLJ^2/d2)^3)]
 
-$concreteParams = <|epsLJ -> 1.0, sigLJ -> 1.0|>
+(* Empty: epsLJ/sigLJ are assigned above; no Jpair mechanism needed. *)
+$concreteParams = <||>
 
-$couplingFormulaStr = "4*epsLJ*((sigLJ^2/d2)^6 - (sigLJ^2/d2)^3)"
+$couplingFormulaStr = "4*epsLJ*((sigLJ^2/d2)^6-(sigLJ^2/d2)^3); min at d2=1, depth=epsLJ"
 
 
 (* ================================================================
